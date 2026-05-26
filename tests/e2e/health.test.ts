@@ -1,3 +1,4 @@
+import { ConfigModule } from "@nestjs/config";
 import {
   FastifyAdapter,
   NestFastifyApplication,
@@ -6,14 +7,20 @@ import { Test, TestingModule } from "@nestjs/testing";
 import * as nock from "nock";
 import request from "supertest";
 
-import { AppModule } from "@/app/app.module";
+import { HealthModule } from "@/app/health/health.module";
+
+import { LoggerModule } from "@/shared/logger/logger.module";
 
 describe("Health", () => {
   let app: NestFastifyApplication;
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
+      imports: [
+        ConfigModule.forRoot({ isGlobal: true }),
+        LoggerModule,
+        HealthModule,
+      ],
     }).compile();
 
     app = moduleFixture.createNestApplication<NestFastifyApplication>(
