@@ -1,0 +1,387 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "Booking API",
+    "description": "Colección completa del servicio Booking (NestJS v1).\n\n**Módulos:** Health, Availability, Blocks, Reservations\n\n**Requisitos:**\n- Servicio en ejecución (`pnpm dev`)\n- Postgres y MySQL accesibles (Docker Compose)\n\n**Importar:**\n1. Import → este archivo `.json`\n2. Import → `booking-local.postman_environment.json`\n3. Activa el entorno **Booking - Local**\n\n**Respuesta API:** `{ \"ok\": true, \"status\": 200, \"data\": ... }`\n\n**Variables:** `site_id` (default `3198`), `user_id` (default `3506`) — cámbialas en el entorno.\n\nLas peticiones **Create** guardan `availability_id`, `block_id` y `reservation_id` en variables.\n\n**Reservas:** antes de crear, ejecuta **Create availability** con `is_available: true` y usa en `checkin` una fecha generada (desde mañana). El `site_id` debe existir en MySQL (`sites`).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "site_id",
+      "value": "3198",
+      "type": "string"
+    },
+    {
+      "key": "user_id",
+      "value": "3506",
+      "type": "string"
+    },
+    {
+      "key": "availability_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "block_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "reservation_id",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            },
+            "description": "Comprueba que el servicio está activo.\n\n**Respuesta:** `{ \"status\": \"ok\" }`"
+          },
+          "response": []
+        }
+      ],
+      "description": "Endpoint sin versión URI."
+    },
+    {
+      "name": "Availability",
+      "item": [
+        {
+          "name": "Create availability",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201 || pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  const body = json.data !== undefined ? json.data : json;",
+                  "  const first = Array.isArray(body) ? body[0] : body;",
+                  "  if (first && first.id) {",
+                  "    pm.collectionVariables.set('availability_id', first.id);",
+                  "    pm.environment.set('availability_id', first.id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"day\": 7,\n  \"site_id\": {{site_id}},\n  \"is_available\": true,\n  \"min_nights\": 1,\n  \"max_nights\": 30\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/availability",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "availability"]
+            },
+            "description": "Crea registros de disponibilidad para los próximos N días (desde mañana).\n\n**Body requerido:**\n| Campo | Tipo | Requerido | Notas |\n|-------|------|-----------|-------|\n| `day` | int | Sí | 1, 2, 3, 4, 5, 6, 7, 10, 14, 21, 30, 60, 90, 180, 365 |\n| `site_id` | number | Sí | ID del sitio |\n| `min_nights` | int | Sí | ≥ 0 |\n| `max_nights` | int | Sí | ≥ 0 |\n| `is_available` | boolean | No | Default: false |"
+          },
+          "response": []
+        },
+        {
+          "name": "List all availability",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/availability",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "availability"]
+            },
+            "description": "Lista todos los registros, ordenados por `created_at` DESC."
+          },
+          "response": []
+        },
+        {
+          "name": "Get availability by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/availability/{{availability_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "availability", "{{availability_id}}"]
+            },
+            "description": "Obtiene un registro por UUID (`{{availability_id}}`)."
+          },
+          "response": []
+        },
+        {
+          "name": "Update availability",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"is_available\": false,\n  \"min_nights\": 2,\n  \"max_nights\": 14\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/availability/{{availability_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "availability", "{{availability_id}}"]
+            },
+            "description": "Actualización parcial. Campos opcionales: `day`, `site_id`, `is_available`, `min_nights`, `max_nights`."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete availability",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/availability/{{availability_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "availability", "{{availability_id}}"]
+            },
+            "description": "Elimina un registro. **Respuesta:** `204 No Content`."
+          },
+          "response": []
+        }
+      ],
+      "description": "CRUD `/v1/availability`"
+    },
+    {
+      "name": "Blocks",
+      "item": [
+        {
+          "name": "Create block",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201 || pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  const body = json.data !== undefined ? json.data : json;",
+                  "  if (body && body.id) {",
+                  "    pm.collectionVariables.set('block_id', body.id);",
+                  "    pm.environment.set('block_id', body.id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"site_id\": {{site_id}},\n  \"start_date\": \"2026-05-21\",\n  \"end_date\": \"2026-05-28\",\n  \"type\": \"manual_block\",\n  \"reference_id\": \"550e8400-e29b-41d4-a716-446655440000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/blocks",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "blocks"]
+            },
+            "description": "Crea un bloqueo de fechas para un sitio.\n\n**Body requerido:**\n| Campo | Tipo | Requerido | Notas |\n|-------|------|-----------|-------|\n| `site_id` | int | Sí | ≥ 1 |\n| `start_date` | string | Sí | ISO 8601 date (`YYYY-MM-DD`) |\n| `end_date` | string | Sí | ISO 8601 date (`YYYY-MM-DD`) |\n| `type` | string | Sí | `maintenance` o `manual_block` |\n| `reference_id` | string | Sí | UUID v4 |"
+          },
+          "response": []
+        },
+        {
+          "name": "List all blocks",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/blocks",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "blocks"]
+            },
+            "description": "Lista todos los bloques, ordenados por `created_at` DESC."
+          },
+          "response": []
+        },
+        {
+          "name": "Get block by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/blocks/{{block_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "blocks", "{{block_id}}"]
+            },
+            "description": "Obtiene un bloque por UUID (`{{block_id}}`).\n\n**404:** si no existe."
+          },
+          "response": []
+        },
+        {
+          "name": "Update block",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"end_date\": \"2026-06-01\",\n  \"type\": \"maintenance\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/blocks/{{block_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "blocks", "{{block_id}}"]
+            },
+            "description": "Actualización parcial.\n\n**Body (todos opcionales):** `site_id`, `start_date`, `end_date`, `type`, `reference_id`.\n\n`type` solo acepta: `maintenance`, `manual_block`."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete block",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/blocks/{{block_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "blocks", "{{block_id}}"]
+            },
+            "description": "Eliminación lógica (soft delete). **Respuesta:** `204 No Content`."
+          },
+          "response": []
+        }
+      ],
+      "description": "CRUD `/v1/blocks`"
+    },
+    {
+      "name": "Reservations",
+      "item": [
+        {
+          "name": "Create reservation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201 || pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  const body = json.data !== undefined ? json.data : json;",
+                  "  if (body && body.id) {",
+                  "    pm.collectionVariables.set('reservation_id', String(body.id));",
+                  "    pm.environment.set('reservation_id', String(body.id));",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"site_id\": {{site_id}},\n  \"source\": \"internal\",\n  \"user_id\": {{user_id}},\n  \"checkin\": \"2026-05-21\",\n  \"checkout\": \"2026-05-25\",\n  \"guests\": 2,\n  \"pets\": 0,\n  \"subtotal\": 500,\n  \"commission\": 50\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/reservations",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "reservations"]
+            },
+            "description": "Crea una reserva en estado `pending`.\n\n**Prerrequisitos:**\n1. Disponibilidad creada para el `site_id` con `is_available: true` en la fecha de `checkin`.\n2. El sitio debe existir en MySQL (`sites`).\n\n**Body requerido:**\n| Campo | Tipo | Notas |\n|-------|------|-------|\n| `site_id` | int | ID del sitio |\n| `source` | string | `internal`, `airbnb`, `booking`, `vrbo` |\n| `user_id` | int | ID de usuario |\n| `checkin` | string | `YYYY-MM-DD` — debe coincidir con un registro de availability disponible |\n| `checkout` | string | `YYYY-MM-DD` |\n| `guests` | int | |\n| `pets` | int | |\n| `subtotal` | number | |\n| `commission` | number | |\n\nAl crear, marca la availability del checkin como no disponible."
+          },
+          "response": []
+        },
+        {
+          "name": "Confirm reservation",
+          "request": {
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/reservations/{{reservation_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "reservations", "{{reservation_id}}"]
+            },
+            "description": "Confirma una reserva (`status` → `confirmed`).\n\n**Path:** `id` — entero (usa `{{reservation_id}}`).\n\nSin body."
+          },
+          "response": []
+        },
+        {
+          "name": "Cancel reservation",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/reservations/{{reservation_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "reservations", "{{reservation_id}}"]
+            },
+            "description": "Cancela una reserva (`status` → `cancelled`).\n\n**Path:** `id` — entero (usa `{{reservation_id}}`).\n\nSin body."
+          },
+          "response": []
+        }
+      ],
+      "description": "Reservas `/v1/reservations` — crear, confirmar y cancelar."
+    }
+  ]
+}

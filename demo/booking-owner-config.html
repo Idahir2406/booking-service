@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Configuración de reservas — demo UX</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;1,9..144,500&family=Figtree:ital,wght@0,400;0,600;0,700;1,400&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --ink: #0f1419;
+        --mist: #e8edf2;
+        --paper: #f6f3ee;
+        --card: #fffefb;
+        --shadow: rgba(15, 20, 25, 0.12);
+        --accent: #1b6b5c;
+        --accent-soft: #d4ebe6;
+        --warning: #b45309;
+        --warning-soft: #fff4e6;
+        --blocked: #5c3d6b;
+        --blocked-soft: #f0e8f4;
+        --radius-lg: 20px;
+        --radius-sm: 10px;
+        --font-display: "Fraunces", Georgia, serif;
+        --font-ui: "Figtree", system-ui, sans-serif;
+        --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: var(--font-ui);
+        font-size: 15px;
+        line-height: 1.55;
+        color: var(--ink);
+        background: radial-gradient(
+            120% 80% at 10% -10%,
+            #cfe8e2 0%,
+            transparent 55%
+          ),
+          radial-gradient(
+            90% 60% at 100% 0%,
+            #e5dff5 0%,
+            transparent 50%
+          ),
+          var(--paper);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+
+      .page {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: clamp(1.25rem, 4vw, 2.75rem);
+      }
+
+      @keyframes rise {
+        from {
+          opacity: 0;
+          transform: translateY(14px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .rise {
+        animation: rise 0.75s var(--ease-out) both;
+      }
+
+      .rise:nth-child(1) {
+        animation-delay: 0.05s;
+      }
+      .rise:nth-child(2) {
+        animation-delay: 0.12s;
+      }
+      .rise:nth-child(3) {
+        animation-delay: 0.19s;
+      }
+      .rise:nth-child(4) {
+        animation-delay: 0.26s;
+      }
+
+      header {
+        display: grid;
+        gap: 0.75rem;
+        margin-bottom: 2rem;
+        padding-bottom: 1.5rem;
+        border-bottom: 1px solid color-mix(in srgb, var(--ink) 12%, transparent);
+      }
+
+      .eyebrow {
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: color-mix(in srgb, var(--ink) 55%, transparent);
+      }
+
+      h1 {
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: clamp(1.75rem, 4vw, 2.35rem);
+        font-weight: 700;
+        font-variation-settings: "SOFT" 40, "WONK" 1;
+        letter-spacing: -0.02em;
+        line-height: 1.15;
+      }
+
+      .lede {
+        max-width: 52ch;
+        margin: 0;
+        color: color-mix(in srgb, var(--ink) 72%, transparent);
+        font-size: 0.98rem;
+      }
+
+      .layout {
+        display: grid;
+        gap: 1.5rem;
+      }
+
+      @media (min-width: 900px) {
+        .layout {
+          grid-template-columns: 1fr 320px;
+          align-items: start;
+        }
+      }
+
+      .panels {
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+      }
+
+      .panel {
+        background: var(--card);
+        border-radius: var(--radius-lg);
+        box-shadow: 0 12px 40px var(--shadow);
+        border: 1px solid color-mix(in srgb, var(--ink) 8%, transparent);
+        overflow: hidden;
+      }
+
+      .panel__head {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 0.5rem 1rem;
+        padding: 1.1rem 1.35rem;
+        background: linear-gradient(
+          135deg,
+          color-mix(in srgb, var(--accent) 8%, var(--card)) 0%,
+          var(--card) 60%
+        );
+        border-bottom: 1px solid color-mix(in srgb, var(--ink) 8%, transparent);
+      }
+
+      .panel__title {
+        margin: 0;
+        font-family: var(--font-display);
+        font-size: 1.2rem;
+        font-weight: 700;
+      }
+
+      .panel__meta {
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: color-mix(in srgb, var(--ink) 48%, transparent);
+      }
+
+      .panel__body {
+        padding: 1.35rem;
+        display: grid;
+        gap: 1.25rem;
+      }
+
+      .tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        padding: 0.35rem;
+        background: var(--mist);
+        border-radius: 999px;
+        width: fit-content;
+        max-width: 100%;
+      }
+
+      .tabs button {
+        font: inherit;
+        font-weight: 600;
+        font-size: 0.85rem;
+        border: none;
+        cursor: pointer;
+        padding: 0.55rem 1rem;
+        border-radius: 999px;
+        background: transparent;
+        color: color-mix(in srgb, var(--ink) 55%, transparent);
+        transition: background 0.25s var(--ease-out), color 0.25s var(--ease-out),
+          box-shadow 0.25s var(--ease-out);
+      }
+
+      .tabs button:hover {
+        color: var(--ink);
+        background: color-mix(in srgb, var(--card) 70%, transparent);
+      }
+
+      .tabs button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+      }
+
+      .tabs button[aria-selected="true"] {
+        background: var(--card);
+        color: var(--ink);
+        box-shadow: 0 4px 14px var(--shadow);
+      }
+
+      [data-panel] {
+        display: none;
+      }
+
+      [data-panel][data-visible="true"] {
+        display: grid;
+        gap: 1.25rem;
+      }
+
+      .field-grid {
+        display: grid;
+        gap: 1rem;
+      }
+
+      @media (min-width: 560px) {
+        .field-grid--2 {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+
+      label {
+        display: grid;
+        gap: 0.35rem;
+        font-weight: 600;
+        font-size: 0.82rem;
+      }
+
+      .hint {
+        font-weight: 400;
+        font-size: 0.78rem;
+        color: color-mix(in srgb, var(--ink) 52%, transparent);
+      }
+
+      input[type="number"],
+      input[type="text"],
+      select {
+        font: inherit;
+        padding: 0.65rem 0.75rem;
+        border-radius: var(--radius-sm);
+        border: 1px solid color-mix(in srgb, var(--ink) 16%, transparent);
+        background: var(--card);
+        transition: border-color 0.2s, box-shadow 0.2s;
+      }
+
+      input:focus-visible,
+      select:focus-visible {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+      }
+
+      .switch-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding: 0.85rem 1rem;
+        border-radius: var(--radius-sm);
+        background: color-mix(in srgb, var(--mist) 65%, var(--card));
+        border: 1px solid color-mix(in srgb, var(--ink) 8%, transparent);
+      }
+
+      .switch-row__text strong {
+        display: block;
+        font-size: 0.9rem;
+      }
+
+      .switch {
+        position: relative;
+        width: 52px;
+        height: 30px;
+        flex-shrink: 0;
+      }
+
+      .switch input {
+        position: absolute;
+        opacity: 0;
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        cursor: pointer;
+        z-index: 2;
+      }
+
+      .switch__track {
+        position: absolute;
+        inset: 0;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--ink) 18%, var(--mist));
+        transition: background 0.25s var(--ease-out);
+      }
+
+      .switch__thumb {
+        position: absolute;
+        top: 3px;
+        left: 3px;
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        background: var(--card);
+        box-shadow: 0 2px 8px var(--shadow);
+        transition: transform 0.28s var(--ease-out);
+      }
+
+      .switch input:checked + .switch__track {
+        background: var(--accent);
+      }
+
+      .switch input:checked + .switch__track + .switch__thumb {
+        transform: translateX(22px);
+      }
+
+      .switch input:focus-visible + .switch__track {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        padding: 0.35rem 0.6rem;
+        border-radius: 999px;
+      }
+
+      .pill--avail {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+
+      .pill--block {
+        background: var(--blocked-soft);
+        color: var(--blocked);
+      }
+
+      .pill--price {
+        background: color-mix(in srgb, var(--warning-soft) 90%, var(--card));
+        color: var(--warning);
+      }
+
+      .list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 0.65rem;
+      }
+
+      .list li {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 0.5rem 1rem;
+        align-items: center;
+        padding: 0.85rem 1rem;
+        border-radius: var(--radius-sm);
+        border: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
+        background: color-mix(in srgb, var(--card) 92%, var(--mist));
+      }
+
+      .list li span {
+        font-size: 0.82rem;
+        color: color-mix(in srgb, var(--ink) 58%, transparent);
+      }
+
+      .tag {
+        font-size: 0.72rem;
+        font-weight: 700;
+        padding: 0.25rem 0.5rem;
+        border-radius: 6px;
+        background: var(--mist);
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.65rem;
+      }
+
+      .btn {
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+        border-radius: 999px;
+        padding: 0.65rem 1.25rem;
+        border: none;
+        transition: transform 0.2s var(--ease-out), box-shadow 0.2s var(--ease-out);
+      }
+
+      .btn:active {
+        transform: scale(0.98);
+      }
+
+      .btn:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+      }
+
+      .btn--primary {
+        background: var(--accent);
+        color: #fff;
+        box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 35%, transparent);
+      }
+
+      .btn--primary:hover {
+        box-shadow: 0 10px 28px color-mix(in srgb, var(--accent) 45%, transparent);
+      }
+
+      .btn--ghost {
+        background: transparent;
+        color: var(--ink);
+        border: 1px solid color-mix(in srgb, var(--ink) 22%, transparent);
+      }
+
+      .btn--ghost:hover {
+        background: var(--mist);
+      }
+
+      aside {
+        position: sticky;
+        top: 1.25rem;
+        display: grid;
+        gap: 1rem;
+      }
+
+      .map-card {
+        background: var(--ink);
+        color: #e6eef5;
+        border-radius: var(--radius-lg);
+        padding: 1.25rem;
+        overflow: hidden;
+        position: relative;
+      }
+
+      .map-card::after {
+        content: "";
+        position: absolute;
+        inset: -40%;
+        background: radial-gradient(
+          circle at 30% 30%,
+          color-mix(in srgb, var(--accent) 55%, transparent) 0%,
+          transparent 45%
+        );
+        opacity: 0.35;
+        pointer-events: none;
+      }
+
+      .map-card h2 {
+        position: relative;
+        margin: 0 0 0.5rem;
+        font-family: var(--font-display);
+        font-size: 1.1rem;
+      }
+
+      .map-card p {
+        position: relative;
+        margin: 0;
+        font-size: 0.85rem;
+        opacity: 0.88;
+        max-width: 28ch;
+      }
+
+      .legend {
+        position: relative;
+        margin-top: 1rem;
+        display: grid;
+        gap: 0.45rem;
+        font-size: 0.78rem;
+      }
+
+      .legend span {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+      }
+
+      .dot--open {
+        background: #6ee7c5;
+      }
+      .dot--rule {
+        background: #fcd34d;
+      }
+      .dot--closed {
+        background: #c084fc;
+      }
+
+      footer.note {
+        margin-top: 2rem;
+        font-size: 0.8rem;
+        color: color-mix(in srgb, var(--ink) 50%, transparent);
+        max-width: 70ch;
+      }
+
+      footer.note code {
+        font-size: 0.78em;
+        background: var(--mist);
+        padding: 0.1em 0.35em;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <header class="rise">
+        <span class="eyebrow">Demo UX — dueño de alojamiento</span>
+        <h1>Configura cómo se reserva tu espacio</h1>
+        <p class="lede">
+          La mejor experiencia agrupa tres cosas que el dueño entiende sin jargon:
+          <strong>reglas de estancia</strong> (tu entidad <code>availability</code>),
+          <strong>fechas cerradas o especiales</strong> (<code>blocks</code>) y
+          <strong>precios por temporadas</strong> (<code>prices</code>). Aquí se
+          ven juntas, con el mismo lenguaje que usarías en recepción.
+        </p>
+      </header>
+
+      <div class="layout">
+        <div class="panels">
+          <section class="panel rise" aria-labelledby="tabs-label">
+            <div class="panel__head">
+              <h2 class="panel__title" id="tabs-label">Panel de control</h2>
+              <span class="panel__meta">Vista previa — sin envío a API</span>
+            </div>
+            <div class="panel__body">
+              <div
+                class="tabs"
+                role="tablist"
+                aria-label="Secciones de configuración"
+              >
+                <button
+                  type="button"
+                  role="tab"
+                  id="tab-avail"
+                  aria-selected="true"
+                  aria-controls="panel-avail"
+                  tabindex="0"
+                >
+                  Disponibilidad
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  id="tab-blocks"
+                  aria-selected="false"
+                  aria-controls="panel-blocks"
+                  tabindex="-1"
+                >
+                  Bloqueos
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  id="tab-prices"
+                  aria-selected="false"
+                  aria-controls="panel-prices"
+                  tabindex="-1"
+                >
+                  Precios
+                </button>
+              </div>
+
+              <!-- availability entity -->
+              <div
+                id="panel-avail"
+                role="tabpanel"
+                aria-labelledby="tab-avail"
+                data-panel
+                data-visible="true"
+              >
+                <p class="hint" style="margin: 0">
+                  Equivale a tu tabla <strong>availability</strong>:
+                  <code>accommodation_id</code>, <code>is_available</code>,
+                  <code>min_nights</code>, <code>max_nights</code>,
+                  <code>check_in_allowed</code>, <code>check_out_allowed</code>.
+                </p>
+
+                <div class="switch-row">
+                  <div class="switch-row__text">
+                    <strong>Aceptar reservas nuevas</strong>
+                    <span class="hint" id="hint-avail"
+                      >Si lo apagas, el alojamiento deja de venderse online (pero
+                      puedes seguir gestionando bloqueos y precios).</span
+                    >
+                  </div>
+                  <label class="switch" title="is_available">
+                    <input
+                      type="checkbox"
+                      checked
+                      aria-describedby="hint-avail"
+                      aria-label="Aceptar reservas nuevas (disponibilidad general)"
+                    />
+                    <span class="switch__track" aria-hidden="true"></span>
+                    <span class="switch__thumb" aria-hidden="true"></span>
+                  </label>
+                </div>
+
+                <div class="field-grid field-grid--2">
+                  <label>
+                    Estancia mínima (noches)
+                    <span class="hint">min_nights</span>
+                    <input type="number" min="1" value="2" name="min_nights" />
+                  </label>
+                  <label>
+                    Estancia máxima (noches)
+                    <span class="hint">max_nights</span>
+                    <input type="number" min="1" value="14" name="max_nights" />
+                  </label>
+                </div>
+
+                <div class="switch-row">
+                  <div class="switch-row__text">
+                    <strong>Permitir entrada (check-in)</strong>
+                    <span class="hint">check_in_allowed — útil en festivos o
+                      limpieza profunda.</span
+                    >
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" checked aria-label="Check-in permitido" />
+                    <span class="switch__track" aria-hidden="true"></span>
+                    <span class="switch__thumb" aria-hidden="true"></span>
+                  </label>
+                </div>
+
+                <div class="switch-row">
+                  <div class="switch-row__text">
+                    <strong>Permitir salida (check-out)</strong>
+                    <span class="hint">check_out_allowed</span>
+                  </div>
+                  <label class="switch">
+                    <input type="checkbox" checked aria-label="Check-out permitido" />
+                    <span class="switch__track" aria-hidden="true"></span>
+                    <span class="switch__thumb" aria-hidden="true"></span>
+                  </label>
+                </div>
+
+                <div class="actions">
+                  <button type="button" class="btn btn--primary">
+                    Guardar reglas de estancia
+                  </button>
+                  <button type="button" class="btn btn--ghost">Descartar</button>
+                </div>
+              </div>
+
+              <!-- blocks entity -->
+              <div
+                id="panel-blocks"
+                role="tabpanel"
+                aria-labelledby="tab-blocks"
+                data-panel
+                data-visible="false"
+                hidden
+              >
+                <p class="hint" style="margin: 0">
+                  Tabla <strong>blocks</strong>: rangos con
+                  <code>type</code> (reserva interna, mantenimiento, cierre manual),
+                  más <code>reference_id</code> para enlazar con calendario o
+                  incidencia.
+                </p>
+
+                <div class="field-grid field-grid--2">
+                  <label>
+                    Desde
+                    <input type="text" value="2026-06-10" aria-label="Fecha inicio bloqueo" />
+                  </label>
+                  <label>
+                    Hasta
+                    <input type="text" value="2026-06-12" aria-label="Fecha fin bloqueo" />
+                  </label>
+                </div>
+                <label>
+                  Motivo
+                  <select name="block_type" aria-label="Tipo de bloqueo">
+                    <option value="maintenance">Mantenimiento</option>
+                    <option value="manual_block">Cierre manual</option>
+                    <option value="booking">Reserva / uso interno</option>
+                  </select>
+                </label>
+
+                <p class="hint" style="margin: 0">
+                  Lista viva de lo que ya tienes programado (demo):
+                </p>
+                <ul class="list" aria-label="Bloqueos existentes">
+                  <li>
+                    <div>
+                      <strong>12–15 ago 2026</strong>
+                      <span>Mantenimiento · ref. cal-taller-02</span>
+                    </div>
+                    <span class="tag">maintenance</span>
+                  </li>
+                  <li>
+                    <div>
+                      <strong>24–26 dic 2026</strong>
+                      <span>Cierre manual · ref. navidad-local</span>
+                    </div>
+                    <span class="tag">manual_block</span>
+                  </li>
+                </ul>
+
+                <div class="actions">
+                  <button type="button" class="btn btn--primary">
+                    Añadir bloqueo
+                  </button>
+                  <button type="button" class="btn btn--ghost">Importar iCal</button>
+                </div>
+              </div>
+
+              <!-- prices entity -->
+              <div
+                id="panel-prices"
+                role="tabpanel"
+                aria-labelledby="tab-prices"
+                data-panel
+                data-visible="false"
+                hidden
+              >
+                <p class="hint" style="margin: 0">
+                  Tabla <strong>prices</strong>: temporadas con
+                  <code>start_date</code>, <code>end_date</code>,
+                  <code>price</code> y <code>currency</code> (aquí el dueño piensa
+                  en “temporada alta / media / baja”, no en filas SQL).
+                </p>
+
+                <div class="field-grid field-grid--2">
+                  <label>
+                    Temporada — desde
+                    <input type="text" value="2026-07-01" />
+                  </label>
+                  <label>
+                    hasta
+                    <input type="text" value="2026-08-31" />
+                  </label>
+                </div>
+                <div class="field-grid field-grid--2">
+                  <label>
+                    Precio por noche
+                    <input type="text" inputmode="decimal" value="125.00" />
+                  </label>
+                  <label>
+                    Moneda
+                    <select>
+                      <option>EUR</option>
+                      <option>USD</option>
+                      <option>MXN</option>
+                    </select>
+                  </label>
+                </div>
+
+                <ul class="list" aria-label="Precios por temporada">
+                  <li>
+                    <div>
+                      <strong>1 ene – 31 mar 2026</strong>
+                      <span>Tarifa base invierno</span>
+                    </div>
+                    <span class="tag">89 €</span>
+                  </li>
+                  <li>
+                    <div>
+                      <strong>1 jul – 31 ago 2026</strong>
+                      <span>Verano</span>
+                    </div>
+                    <span class="tag">125 €</span>
+                  </li>
+                </ul>
+
+                <div class="actions">
+                  <button type="button" class="btn btn--primary">
+                    Guardar temporada
+                  </button>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <footer class="note rise">
+            <strong>Recomendación UX:</strong> en producción, mantén estas tres
+            piezas en el mismo sitio (pestañas o pasos cortos) y muestra siempre un
+            resumen lateral: “así quedará el calendario” con leyenda de abierto /
+            reglas / cerrado. Evita menús profundos: el dueño piensa en fechas y
+            reglas, no en nombres de tablas.
+          </footer>
+        </div>
+
+        <aside class="rise">
+          <div class="map-card">
+            <h2>Resumen visual</h2>
+            <p>
+              Un solo vistazo: qué días se pueden reservar, qué reglas aplican y
+              cuánto cuesta cada tramo.
+            </p>
+            <div class="legend">
+              <span
+                ><i class="dot dot--open" aria-hidden="true"></i> Disponible con
+                reglas activas</span
+              >
+              <span
+                ><i class="dot dot--rule" aria-hidden="true"></i> Precio especial
+                / mínimo de noches</span
+              >
+              <span
+                ><i class="dot dot--closed" aria-hidden="true"></i> Bloqueado
+                (mantenimiento o manual)</span
+              >
+            </div>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 0.5rem">
+            <span class="pill pill--avail">availability</span>
+            <span class="pill pill--block">blocks</span>
+            <span class="pill pill--price">prices</span>
+          </div>
+        </aside>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        const tabs = Array.from(document.querySelectorAll('[role="tab"]'));
+        const panels = Array.from(document.querySelectorAll("[data-panel]"));
+
+        const setPanel = (id) => {
+          tabs.forEach((tab) => {
+            const selected = tab.id === id;
+            tab.setAttribute("aria-selected", String(selected));
+            tab.tabIndex = selected ? 0 : -1;
+          });
+          panels.forEach((panel) => {
+            const visible = panel.getAttribute("aria-labelledby") === id;
+            panel.dataset.visible = String(visible);
+            panel.hidden = !visible;
+          });
+        };
+
+        tabs.forEach((tab) => {
+          tab.addEventListener("click", () => setPanel(tab.id));
+          tab.addEventListener("keydown", (e) => {
+            const i = tabs.indexOf(tab);
+            if (e.key === "ArrowRight" || e.key === "ArrowDown") {
+              e.preventDefault();
+              const next = tabs[(i + 1) % tabs.length];
+              next.focus();
+              setPanel(next.id);
+            }
+            if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
+              e.preventDefault();
+              const prev = tabs[(i - 1 + tabs.length) % tabs.length];
+              prev.focus();
+              setPanel(prev.id);
+            }
+          });
+        });
+      })();
+    </script>
+  </body>
+</html>
