@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
@@ -20,8 +21,17 @@ import {
   StatusValue,
 } from "../entities/reservation.entity";
 
+export interface ActivateFromPaymentInput {
+  reservationId: number;
+  checkoutSessionId: string;
+  paymentIntentId: string | null;
+  amountPaidCents: number;
+}
+
 @Injectable()
 export class ReservationService {
+  private readonly logger = new Logger(ReservationService.name);
+
   constructor(
     @InjectRepository(ReservationEntity)
     private readonly reservationRepository: Repository<ReservationEntity>,
@@ -88,6 +98,12 @@ export class ReservationService {
     return reservation;
   }
 
+  async findById(id: number) {
+    return this.reservationRepository.findOne({
+      where: { id },
+    });
+  }
+
   async find_active_by_site_and_range(
     site_id: number,
     from_iso: string,
@@ -119,6 +135,82 @@ export class ReservationService {
         checkout: MoreThan(checkin),
       },
     });
+  }
+
+  async saveStripeCheckoutSessionId(id: number, checkoutSessionId: string) {
+    const reservation = await this.reservationRepository.preload({
+      id,
+      stripe_checkout_session_id: checkoutSessionId,
+    });
+    if (!reservation) {
+      throw new NotFoundException(`Reservation with id ${id} not found`);
+    }
+    return this.reservationRepository.save(reservation);
+  }
+
+  async activateFromPayment(input: ActivateFromPaymentInput) {
+    const reservation = await this.reservationRepository.findOne({
+      where: { id: input.reservationId },
+    });
+    if (!reservation) {
+      throw new NotFoundException(
+        `Reservation with id ${input.reservationId} not found`,
+      );
+    }
+
+    if (
+      reservation.status === "confirmed" &&
+      reservation.payment_status === "paid"
+    ) {
+      return reservation;
+    }
+
+    if (reservation.status === "cancelled") {
+      this.logger.warn(
+        `Payment received for cancelled reservation ${reservation.id} (session ${input.checkoutSessionId}). Manual review required.`,
+      );
+      return reservation;
+    }
+
+    if (
+      reservation.status !== "pending" ||
+      reservation.payment_status !== "pending"
+    ) {
+      this.logger.warn(
+        `Payment received for reservation ${reservation.id} in unexpected state: status=${reservation.status}, payment_status=${reservation.payment_status}`,
+      );
+      return reservation;
+    }
+    const expectedAmountCents = Math.round(
+      (Number(reservation.subtotal) + Number(reservation.commission)) * 100,
+    );
+
+    if (input.amountPaidCents !== expectedAmountCents) {
+      throw new BadRequestException(
+        `Payment amount mismatch for reservation ${reservation.id}: expected ${expectedAmountCents} cents, got ${input.amountPaidCents}`,
+      );
+    }
+
+    const paidAt = new Date();
+    const totalPaid = input.amountPaidCents / 100;
+
+    const updated = await this.reservationRepository.preload({
+      id: reservation.id,
+      status: "confirmed" as StatusValue,
+      payment_status: "paid" as PaymentStatusValue,
+      paid_at: paidAt,
+      stripe_checkout_session_id: input.checkoutSessionId,
+      stripe_payment_intent_id: input.paymentIntentId ?? undefined,
+      total: totalPaid,
+    });
+
+    if (!updated) {
+      throw new NotFoundException(
+        `Reservation with id ${input.reservationId} not found`,
+      );
+    }
+
+    return this.reservationRepository.save(updated);
   }
 
   async cancel(id: number) {
@@ -153,14 +245,36 @@ export class ReservationService {
   }
 
   async confirm(id: number) {
-    const reservation = await this.reservationRepository.preload({
-      id,
-      status: "confirmed" as StatusValue,
+    const reservation = await this.reservationRepository.findOne({
+      where: { id },
     });
     if (!reservation) {
       throw new NotFoundException(`Reservation with id ${id} not found`);
     }
-    return this.reservationRepository.save(reservation);
+
+    if (
+      reservation.status === "confirmed" &&
+      reservation.payment_status === "paid"
+    ) {
+      return reservation;
+    }
+
+    if (reservation.status !== "pending") {
+      throw new BadRequestException(
+        `Cannot confirm reservation ${id} with status ${reservation.status}`,
+      );
+    }
+
+    const updated = await this.reservationRepository.preload({
+      id,
+      status: "confirmed" as StatusValue,
+      payment_status: "paid" as PaymentStatusValue,
+      paid_at: new Date(),
+    });
+    if (!updated) {
+      throw new NotFoundException(`Reservation with id ${id} not found`);
+    }
+    return this.reservationRepository.save(updated);
   }
 
   @Cron(CronExpression.EVERY_10_SECONDS)

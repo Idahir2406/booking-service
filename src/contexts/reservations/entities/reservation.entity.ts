@@ -59,6 +59,15 @@ export class ReservationEntity {
   @Column({ type: "timestamp" })
   expiration_date!: Date;
 
+  @Column({ type: "text", nullable: true })
+  stripe_checkout_session_id?: string;
+
+  @Column({ type: "text", nullable: true })
+  stripe_payment_intent_id?: string;
+
+  @Column({ type: "timestamp", nullable: true })
+  paid_at?: Date;
+
   @CreateDateColumn()
   created_at!: Date;
 

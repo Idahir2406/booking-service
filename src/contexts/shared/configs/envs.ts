@@ -21,6 +21,7 @@ const envSchema = z.object({
     .default(1000 * 60 * 10),
   DB_PREFIX: z.string().default("v4p_j"),
   STRIPE_API_KEY: z.string(),
+  STRIPE_WEBHOOK_SECRET: z.string(),
   FRONTEND_URL: z.url().default("http://localhost:3000"),
 });
 

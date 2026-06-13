@@ -1,44 +1,82 @@
 import {
   BadRequestException,
   Injectable,
-  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import Stripe from "stripe";
 
 import { Site } from "@/src/types/site.types";
 
+import { ReservationService } from "../../reservations/services/reservation.service";
 import { envs } from "../../shared/configs/envs";
 import { MysqlService } from "../../shared/services/mysql.service";
-import { textToNumberFormatter } from "../../shared/text-to-number.formatter";
+import { CreateExpressAccountDto } from "../dto/create-express-account.dto";
 import { CreateSitePaymentIntentDto } from "../dto/create-site-payment-intent.dto";
+import { StripeConnectStatusDto } from "../dto/stripe-connect-status.dto";
+import { UserProfilesService } from "./user-profiles.service";
 
 @Injectable()
 export class StripeService {
   private readonly stripe: Stripe.Stripe;
-  private readonly logger = new Logger(StripeService.name);
 
-  constructor(private readonly mysqlService: MysqlService) {
+  constructor(
+    private readonly mysqlService: MysqlService,
+    private readonly reservationService: ReservationService,
+    private readonly userProfilesService: UserProfilesService,
+  ) {
     this.stripe = new Stripe(envs.STRIPE_API_KEY, {
-      apiVersion: "2026-04-22.dahlia", // Use latest API version, or "null" for your default
+      apiVersion: "2026-04-22.dahlia",
     });
   }
 
-  async createSitePaymentLink(body: CreateSitePaymentIntentDto) {
-    const customer = await this.createOrGetCustomer(body.email);
-    const site = await this.mysqlService.queryOne<Site>(
-      `SELECT * FROM ${envs.DB_PREFIX}sites1 WHERE id = ?`,
-      [body.site_id],
+  constructWebhookEvent(rawBody: Buffer, signature: string) {
+    return this.stripe.webhooks.constructEvent(
+      rawBody,
+      signature,
+      envs.STRIPE_WEBHOOK_SECRET,
     );
-    if (!site) {
-      throw new NotFoundException(`Site with id ${body.site_id} not found`);
-    }
-    if (!site.precio) {
-      throw new BadRequestException("Site price is not set");
+  }
+
+  async createSitePaymentLink(body: CreateSitePaymentIntentDto) {
+    const reservation = await this.reservationService.findById(
+      body.reservation_id,
+    );
+
+    if (!reservation) {
+      throw new NotFoundException(
+        `Reservation with id ${body.reservation_id} not found`,
+      );
     }
 
-    //price in euro
-    const price = textToNumberFormatter(site.precio);
+    if (
+      reservation.status !== "pending" ||
+      reservation.payment_status !== "pending"
+    ) {
+      throw new BadRequestException(
+        `Reservation ${reservation.id} is not pending payment`,
+      );
+    }
+
+    const site = await this.mysqlService.queryOne<Site>(
+      `SELECT * FROM ${envs.DB_PREFIX}sites1 WHERE id = ?`,
+      [reservation.site_id],
+    );
+    if (!site) {
+      throw new NotFoundException(
+        `Site with id ${reservation.site_id} not found`,
+      );
+    }
+
+    const amountCents = Math.round(
+      (Number(reservation.subtotal) + Number(reservation.commission)) * 100,
+    );
+    if (amountCents <= 0) {
+      throw new BadRequestException(
+        `Reservation ${reservation.id} has invalid payment amount`,
+      );
+    }
+
+    const customer = await this.createOrGetCustomer(body.email);
 
     const checkoutSession = await this.stripe.checkout.sessions.create({
       line_items: [
@@ -49,10 +87,13 @@ export class StripeService {
             product_data: {
               name: site.name ?? "Pago de alojamiento",
             },
-            unit_amount: price * 100,
+            unit_amount: amountCents,
           },
         },
       ],
+      metadata: {
+        reservation_id: reservation.id.toString(),
+      },
       customer: customer.id,
       success_url: `${envs.FRONTEND_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${envs.FRONTEND_URL}/cancel`,
@@ -60,23 +101,82 @@ export class StripeService {
       mode: "payment",
     });
 
-    return checkoutSession;
+    await this.reservationService.saveStripeCheckoutSessionId(
+      reservation.id,
+      checkoutSession.id,
+    );
+
+    return {
+      url: checkoutSession.url,
+      session_id: checkoutSession.id,
+    };
   }
 
-  async expressAccount() {
-    const account = await this.stripe.accounts.create({
-      type: "express",
-    });
+  async getConnectStatus(userId: number): Promise<StripeConnectStatusDto> {
+    const profile = await this.userProfilesService.findById(userId);
+    if (!profile) {
+      throw new NotFoundException(`User profile with id ${userId} not found`);
+    }
+
+    const stripeAccountId = profile.stripe_account_id ?? null;
+    if (!stripeAccountId) {
+      return {
+        user_id: userId,
+        stripe_account_id: null,
+        has_account: false,
+        onboarding_complete: false,
+        can_use_reservations: false,
+      };
+    }
+
+    const account = await this.stripe.accounts.retrieve(stripeAccountId);
+    const onboardingComplete = account.details_submitted === true;
+    const canUseReservations =
+      account.charges_enabled === true && account.details_submitted === true;
+
+    return {
+      user_id: userId,
+      stripe_account_id: stripeAccountId,
+      has_account: true,
+      onboarding_complete: onboardingComplete,
+      can_use_reservations: canUseReservations,
+    };
+  }
+
+  async expressAccount(body: CreateExpressAccountDto) {
+    const userId = body.user_id;
+    const profile = await this.userProfilesService.findById(userId);
+    if (!profile) {
+      throw new NotFoundException(`User profile with id ${userId} not found`);
+    }
+
+    let accountId = profile.stripe_account_id ?? undefined;
+
+    if (!accountId) {
+      const account = await this.stripe.accounts.create({
+        type: "express",
+        metadata: {
+          user_id: userId.toString(),
+        },
+      });
+      accountId = account.id;
+      await this.userProfilesService.saveStripeAccountId(userId, accountId);
+    }
+
+    const returnUrl = `${envs.FRONTEND_URL}/mi-perfil-textos?selTab=tab8&stripe_connect=done`;
+    const refreshUrl = `${envs.FRONTEND_URL}/mi-perfil-textos?selTab=tab8&stripe_connect=refresh`;
 
     const accountLink = await this.stripe.accountLinks.create({
-      account: account.id,
+      account: accountId,
       type: "account_onboarding",
-      refresh_url: `${envs.FRONTEND_URL}/refresh-account`,
-      return_url: `${envs.FRONTEND_URL}/return-account`,
+      refresh_url: refreshUrl,
+      return_url: returnUrl,
     });
+
     return {
-      account_id: account.id,
+      account_id: accountId,
       onboarding_url: accountLink.url,
+      user_id: userId,
     };
   }
 

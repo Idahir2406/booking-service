@@ -127,9 +127,6 @@ importers:
       '@types/node':
         specifier: ^22.8.7
         version: 22.19.19
-      '@types/stripe':
-        specifier: ^8.0.417
-        version: 8.0.417(@types/node@22.19.19)
       '@types/supertest':
         specifier: ^6.0.3
         version: 6.0.3
@@ -1392,10 +1389,6 @@ packages:
 
   '@types/serve-static@2.2.0':
     resolution: {integrity: sha512-8mam4H1NHLtu7nmtalF7eyBH14QyOASmcxHhSfEoRyr0nP/YdoesEtU+uSRvMe96TW/HPTtkoKqQLl53N7UXMQ==}
-
-  '@types/stripe@8.0.417':
-    resolution: {integrity: sha512-PTuqskh9YKNENnOHGVJBm4sM0zE8B1jZw1JIskuGAPkMB+OH236QeN8scclhYGPA4nG6zTtPXgwpXdp+HPDTVw==}
-    deprecated: This is a stub types definition. stripe provides its own type definitions, so you do not need this installed.
 
   '@types/superagent@8.1.10':
     resolution: {integrity: sha512-nbt4IWXABhW0jGmmpRzCFNlbmwCTzZ2gTUsNIr+X+ItdqPms+PAJZbWsNzpS2USqXjcoNLQcO6nXo60zcPQiIg==}
@@ -5936,12 +5929,6 @@ snapshots:
     dependencies:
       '@types/http-errors': 2.0.5
       '@types/node': 22.19.19
-
-  '@types/stripe@8.0.417(@types/node@22.19.19)':
-    dependencies:
-      stripe: 22.1.1(@types/node@22.19.19)
-    transitivePeerDependencies:
-      - '@types/node'
 
   '@types/superagent@8.1.10':
     dependencies:

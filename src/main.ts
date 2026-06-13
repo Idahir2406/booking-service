@@ -12,7 +12,7 @@ import { ResponseInterceptor } from "./contexts/shared/interceptors/response.int
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     rawBody: true,
-    bodyParser: true,
+    bodyParser: false,
   });
 
   const port = envs.PORT;
@@ -33,6 +33,15 @@ async function bootstrap() {
 
   app.useGlobalInterceptors(new ResponseInterceptor());
   app.use(cookieParser());
+  app.use(
+    "/v1/webhook",
+    express.raw({
+      type: "application/json",
+      verify: (req, _res, buf) => {
+        (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+      },
+    }),
+  );
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
   // app.use(passport.session());

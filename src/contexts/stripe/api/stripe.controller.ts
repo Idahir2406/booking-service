@@ -1,5 +1,6 @@
-import { Body, Controller, Post } from "@nestjs/common";
+import { Body, Controller, Get, Param, ParseIntPipe, Post } from "@nestjs/common";
 
+import { CreateExpressAccountDto } from "../dto/create-express-account.dto";
 import { CreateSitePaymentIntentDto } from "../dto/create-site-payment-intent.dto";
 import { StripeService } from "../services/stripe.service";
 
@@ -15,8 +16,13 @@ export class StripeController {
     return this.stripeService.createSitePaymentLink(body);
   }
 
+  @Get("connect-status/:user_id")
+  getConnectStatus(@Param("user_id", ParseIntPipe) user_id: number) {
+    return this.stripeService.getConnectStatus(user_id);
+  }
+
   @Post("express-account")
-  createExpressAccount() {
-    return this.stripeService.expressAccount();
+  createExpressAccount(@Body() body: CreateExpressAccountDto) {
+    return this.stripeService.expressAccount(body);
   }
 }

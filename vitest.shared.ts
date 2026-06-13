@@ -1,7 +1,8 @@
+import type { UserConfig } from "vitest/config";
+
 import path from "node:path";
 
 import swc from "unplugin-swc";
-import type { UserConfig } from "vitest/config";
 
 export const vitestSwcPlugin = swc.vite({
   swcrc: false,

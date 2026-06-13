@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
     "name": "Booking API",
-    "description": "Colección completa del servicio Booking (NestJS v1).\n\n**Módulos:** Health, Availability, Blocks, Reservations\n\n**Requisitos:**\n- Servicio en ejecución (`pnpm dev`)\n- Postgres y MySQL accesibles (Docker Compose)\n\n**Importar:**\n1. Import → este archivo `.json`\n2. Import → `booking-local.postman_environment.json`\n3. Activa el entorno **Booking - Local**\n\n**Respuesta API:** `{ \"ok\": true, \"status\": 200, \"data\": ... }`\n\n**Variables:** `site_id` (default `3198`), `user_id` (default `3506`) — cámbialas en el entorno.\n\nLas peticiones **Create** guardan `availability_id`, `block_id` y `reservation_id` en variables.\n\n**Reservas:** antes de crear, ejecuta **Create availability** con `is_available: true` y usa en `checkin` una fecha generada (desde mañana). El `site_id` debe existir en MySQL (`sites`).",
+    "description": "Colección completa del servicio Booking (NestJS v1).\n\n**Módulos:** Health, Availability, Blocks, Reservations, Stripe, Webhook\n\n**Requisitos:**\n- Servicio en ejecución (`pnpm dev`)\n- Postgres y MySQL accesibles (Docker Compose)\n- Stripe: `STRIPE_API_KEY` y `STRIPE_WEBHOOK_SECRET` en `.env`\n- Webhooks locales: `stripe listen --forward-to localhost:3000/v1/webhook`\n\n**Importar:**\n1. Import → este archivo `.json`\n2. Import → `booking-local.postman_environment.json`\n3. Activa el entorno **Booking - Local**\n\n**Respuesta API:** `{ \"ok\": true, \"status\": 200, \"data\": ... }`\n\n**Variables:** `site_id`, `user_id`, `range_from`, `range_to`, `stripe_test_email`, `reservation_id` — cámbialas en el entorno.\n\nLas peticiones **Create** guardan `availability_id`, `block_id` y `reservation_id` en variables.\n\n**Calendario:** los endpoints `by-site/.../range` requieren query `from` y `to` (`YYYY-MM-DD`, inclusive).\n\n**Reservas:** antes de crear, ejecuta **Create availability** con `is_available: true` y alinea `checkin` con `range_from`. El `site_id` debe existir en MySQL (`sites`).\n\n**Pago Stripe:** Create reservation → Create site payment link → pagar en Checkout → webhook confirma la reserva.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -34,6 +34,21 @@
     {
       "key": "reservation_id",
       "value": "",
+      "type": "string"
+    },
+    {
+      "key": "range_from",
+      "value": "2026-06-05",
+      "type": "string"
+    },
+    {
+      "key": "range_to",
+      "value": "2026-06-30",
+      "type": "string"
+    },
+    {
+      "key": "stripe_test_email",
+      "value": "test@viajes4patas.com",
       "type": "string"
     }
   ],
@@ -123,6 +138,32 @@
           "response": []
         },
         {
+          "name": "List availability by site and range",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/availability/by-site/{{site_id}}/range?from={{range_from}}&to={{range_to}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "availability", "by-site", "{{site_id}}", "range"],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "{{range_from}}",
+                  "description": "Fecha inicio inclusive (YYYY-MM-DD)"
+                },
+                {
+                  "key": "to",
+                  "value": "{{range_to}}",
+                  "description": "Fecha fin inclusive (YYYY-MM-DD)"
+                }
+              ]
+            },
+            "description": "Calendario: disponibilidad de un sitio en un rango de fechas.\n\n**Path:** `site_id` — entero.\n\n**Query requerido:**\n| Campo | Tipo | Notas |\n|-------|------|-------|\n| `from` | string | `YYYY-MM-DD` inclusive |\n| `to` | string | `YYYY-MM-DD` inclusive |"
+          },
+          "response": []
+        },
+        {
           "name": "Get availability by ID",
           "request": {
             "method": "GET",
@@ -179,7 +220,7 @@
           "response": []
         }
       ],
-      "description": "CRUD `/v1/availability`"
+      "description": "CRUD y consultas de calendario `/v1/availability`"
     },
     {
       "name": "Blocks",
@@ -245,6 +286,73 @@
           "response": []
         },
         {
+          "name": "List blocks by site and range",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/blocks/by-site/{{site_id}}/range?from={{range_from}}&to={{range_to}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "blocks", "by-site", "{{site_id}}", "range"],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "{{range_from}}",
+                  "description": "Fecha inicio inclusive (YYYY-MM-DD)"
+                },
+                {
+                  "key": "to",
+                  "value": "{{range_to}}",
+                  "description": "Fecha fin inclusive (YYYY-MM-DD)"
+                }
+              ]
+            },
+            "description": "Calendario: bloques que solapan el rango de fechas para un sitio.\n\n**Path:** `site_id` — entero.\n\n**Query requerido:** `from`, `to` (`YYYY-MM-DD`, inclusive)."
+          },
+          "response": []
+        },
+        {
+          "name": "List blocks by site",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/blocks/by-site/{{site_id}}?only_future=false",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "blocks", "by-site", "{{site_id}}"],
+              "query": [
+                {
+                  "key": "only_future",
+                  "value": "false",
+                  "description": "Si `true`, solo bloques con end_date >= hoy (servidor)"
+                }
+              ]
+            },
+            "description": "Listado del host: todos los bloqueos de un sitio.\n\n**Path:** `site_id` — entero.\n\n**Query opcional:**\n| Campo | Tipo | Default | Notas |\n|-------|------|---------|-------|\n| `only_future` | boolean | `false` | `true` = solo vigentes (end_date desde hoy) |"
+          },
+          "response": []
+        },
+        {
+          "name": "List blocks by site (only future)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/blocks/by-site/{{site_id}}?only_future=true",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "blocks", "by-site", "{{site_id}}"],
+              "query": [
+                {
+                  "key": "only_future",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Mismo endpoint que **List blocks by site** con `only_future=true`."
+          },
+          "response": []
+        },
+        {
           "name": "Get block by ID",
           "request": {
             "method": "GET",
@@ -301,11 +409,37 @@
           "response": []
         }
       ],
-      "description": "CRUD `/v1/blocks`"
+      "description": "CRUD y consultas de calendario `/v1/blocks`"
     },
     {
       "name": "Reservations",
       "item": [
+        {
+          "name": "List reservations by site and range",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/reservations/by-site/{{site_id}}/range?from={{range_from}}&to={{range_to}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "reservations", "by-site", "{{site_id}}", "range"],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "{{range_from}}",
+                  "description": "Fecha inicio inclusive (YYYY-MM-DD)"
+                },
+                {
+                  "key": "to",
+                  "value": "{{range_to}}",
+                  "description": "Fecha fin inclusive (YYYY-MM-DD)"
+                }
+              ]
+            },
+            "description": "Calendario: reservas activas (`pending` o `confirmed`) de un sitio que solapan el rango.\n\n**Path:** `site_id` — entero.\n\n**Query requerido:** `from`, `to` (`YYYY-MM-DD`, inclusive)."
+          },
+          "response": []
+        },
         {
           "name": "Create reservation",
           "event": [
@@ -381,7 +515,117 @@
           "response": []
         }
       ],
-      "description": "Reservas `/v1/reservations` — crear, confirmar y cancelar."
+      "description": "Reservas `/v1/reservations` — calendario, crear, confirmar y cancelar."
+    },
+    {
+      "name": "Stripe",
+      "item": [
+        {
+          "name": "Create site payment link",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reservation_id\": {{reservation_id}},\n  \"email\": \"{{stripe_test_email}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/stripe/site-payment-link",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "stripe", "site-payment-link"]
+            },
+            "description": "Genera enlace de pago Stripe Checkout para una reserva pending.\n\n**Body requerido:**\n| Campo | Tipo | Notas |\n|-------|------|-------|\n| `reservation_id` | int | ID de la reserva en Postgres (usa `{{reservation_id}}`) |\n| `email` | string | Email válido del cliente |\n\nEl monto cobrado es `subtotal + commission` de la reserva.\n\n**Prueba local con Stripe CLI:**\n```bash\nstripe listen --forward-to localhost:3000/v1/webhook\n```\nUsa el puerto de `PORT` en `.env` (por defecto 3000, no 4000). Copia el webhook secret (`whsec_...`) a `STRIPE_WEBHOOK_SECRET` en `.env`.\n\nRequiere `STRIPE_API_KEY` y `STRIPE_WEBHOOK_SECRET` en `.env`."
+          },
+          "response": []
+        },
+        {
+          "name": "Get connect status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/stripe/connect-status/{{user_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "stripe", "connect-status", "{{user_id}}"]
+            },
+            "description": "Estado de Stripe Connect para un host.\n\n**Path:** `user_id` — ID en `v4p_juser_profiles`.\n\n**Respuesta:** `user_id`, `stripe_account_id`, `has_account`, `onboarding_complete`, `can_use_reservations`.\n\n`can_use_reservations` es `true` solo si Stripe devuelve `charges_enabled` y `details_submitted`."
+          },
+          "response": []
+        },
+        {
+          "name": "Create express account",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": {{user_id}},\n  \"return_url\": \"https://www.viajes4patas.com/mi-perfil-textos?selTab=tab8&stripe_connect=done\",\n  \"refresh_url\": \"https://www.viajes4patas.com/mi-perfil-textos?selTab=tab8&stripe_connect=refresh\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/stripe/express-account",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "stripe", "express-account"]
+            },
+            "description": "Inicia onboarding Stripe Connect Express para un host.\n\n**Body requerido:**\n| Campo | Tipo | Notas |\n|-------|------|-------|\n| `user_id` | int | ID en `v4p_juser_profiles` |\n\n**Body opcional:**\n| Campo | Tipo | Notas |\n|-------|------|-------|\n| `return_url` | url | URL de vuelta tras completar onboarding |\n| `refresh_url` | url | URL si el enlace expira o hay que reanudar |\n\nGuarda `stripe_account_id` en MySQL al crear la cuenta. Si ya existe, reutiliza la cuenta y genera un nuevo enlace de onboarding.\n\n**Respuesta:** `account_id`, `onboarding_url`, `user_id`."
+          },
+          "response": []
+        }
+      ],
+      "description": "Integración Stripe `/v1/stripe`"
+    },
+    {
+      "name": "Webhook",
+      "item": [
+        {
+          "name": "Stripe webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"id\": \"evt_test_webhook\",\n  \"object\": \"event\",\n  \"type\": \"checkout.session.completed\",\n  \"data\": {\n    \"object\": {\n      \"id\": \"cs_test_123\",\n      \"object\": \"checkout.session\",\n      \"payment_status\": \"paid\"\n    }\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/webhook",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "webhook"]
+            },
+            "description": "Endpoint de recepción de eventos Stripe con verificación de firma.\n\n**Producción / local con CLI:** Stripe envía el header `Stripe-Signature`. Postman no puede firmar eventos; usa la CLI:\n```bash\nstripe listen --forward-to localhost:3000/v1/webhook\n```\n\nEventos soportados:\n- `checkout.session.completed` → confirma reserva (`status=confirmed`, `payment_status=paid`)\n- `checkout.session.expired` → cancela reserva pending y libera availability\n\nRespuesta exitosa: `{ \"received\": true }`.\n\nSin firma válida responde 400."
+          },
+          "response": []
+        }
+      ],
+      "description": "Webhook `/v1/webhook`"
     }
   ]
 }
