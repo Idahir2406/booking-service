@@ -23,4 +23,4 @@ import { WebhookService } from "./services/webhook.service";
     TypeOrmModule.forFeature([StripeWebhookEventEntity]),
   ],
 })
-export class WebhookModule { }
+export class WebhookModule {}

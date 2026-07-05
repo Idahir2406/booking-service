@@ -1,5 +1,9 @@
+import type { ReservationService } from "../../reservations/services/reservation.service";
+
 import {
   BadRequestException,
+  forwardRef,
+  Inject,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -7,7 +11,6 @@ import Stripe from "stripe";
 
 import { Site } from "@/src/types/site.types";
 
-import { ReservationService } from "../../reservations/services/reservation.service";
 import { envs } from "../../shared/configs/envs";
 import { MysqlService } from "../../shared/services/mysql.service";
 import { CreateExpressAccountDto } from "../dto/create-express-account.dto";
@@ -21,6 +24,13 @@ export class StripeService {
 
   constructor(
     private readonly mysqlService: MysqlService,
+    @Inject(
+      forwardRef(
+        () =>
+          require("../../reservations/services/reservation.service")
+            .ReservationService,
+      ),
+    )
     private readonly reservationService: ReservationService,
     private readonly userProfilesService: UserProfilesService,
   ) {
@@ -95,8 +105,8 @@ export class StripeService {
         reservation_id: reservation.id.toString(),
       },
       customer: customer.id,
-      success_url: `${envs.FRONTEND_URL}/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${envs.FRONTEND_URL}/cancel`,
+      success_url: `${envs.FRONTEND_URL.replace(/\/+$/, "")}/reserva-exito?session_id={CHECKOUT_SESSION_ID}&reservation_id=${reservation.id}`,
+      cancel_url: `${envs.FRONTEND_URL.replace(/\/+$/, "")}/reserva-cancelada?site_id=${reservation.site_id}&reservation_id=${reservation.id}`,
       currency: envs.CURRENCY,
       mode: "payment",
     });
@@ -130,9 +140,9 @@ export class StripeService {
     }
 
     const account = await this.stripe.accounts.retrieve(stripeAccountId);
-    const onboardingComplete = account.details_submitted === true;
+    const onboardingComplete = account.details_submitted;
     const canUseReservations =
-      account.charges_enabled === true && account.details_submitted === true;
+      account.charges_enabled && account.details_submitted;
 
     return {
       user_id: userId,
@@ -189,6 +199,49 @@ export class StripeService {
     }
     return await this.stripe.customers.create({
       email,
+    });
+  }
+
+  async transferHostPayout(input: {
+    paymentIntentId: string;
+    hostUserId: number;
+    totalPaidCents: number;
+  }) {
+    const profile = await this.userProfilesService.findById(input.hostUserId);
+    const destination = profile?.stripe_account_id;
+    if (!destination) {
+      throw new BadRequestException(
+        `Host user ${input.hostUserId} has no Stripe account`,
+      );
+    }
+
+    const platformFeeCents = Math.round(
+      input.totalPaidCents * envs.COMMISSION_PERCENTAGE,
+    );
+    const hostAmountCents = input.totalPaidCents - platformFeeCents;
+    if (hostAmountCents <= 0) {
+      return null;
+    }
+
+    const paymentIntent = await this.stripe.paymentIntents.retrieve(
+      input.paymentIntentId,
+    );
+    const chargeId =
+      typeof paymentIntent.latest_charge === "string"
+        ? paymentIntent.latest_charge
+        : paymentIntent.latest_charge?.id;
+
+    if (!chargeId) {
+      throw new BadRequestException(
+        `PaymentIntent ${input.paymentIntentId} has no charge`,
+      );
+    }
+
+    return this.stripe.transfers.create({
+      amount: hostAmountCents,
+      currency: envs.CURRENCY.toLowerCase(),
+      destination,
+      source_transaction: chargeId,
     });
   }
 }

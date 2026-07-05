@@ -50,9 +50,163 @@
       "key": "stripe_test_email",
       "value": "test@viajes4patas.com",
       "type": "string"
+    },
+    {
+      "key": "room_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "board_option_id",
+      "value": "",
+      "type": "string"
     }
   ],
   "item": [
+    {
+      "name": "Rooms",
+      "item": [
+        {
+          "name": "List rooms by site",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/rooms/by-site/{{site_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "rooms", "by-site", "{{site_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List public rooms by site",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  const body = json.data !== undefined ? json.data : json;",
+                  "  const first = Array.isArray(body) ? body[0] : null;",
+                  "  if (first && first.id) {",
+                  "    pm.collectionVariables.set('room_id', first.id);",
+                  "    pm.environment.set('room_id', first.id);",
+                  "  }",
+                  "  const boardOptions = first && Array.isArray(first.board_options) ? first.board_options : [];",
+                  "  const defaultOption = boardOptions.find(s => s.is_default) || boardOptions[0];",
+                  "  if (defaultOption && defaultOption.id) {",
+                  "    pm.collectionVariables.set('board_option_id', defaultOption.id);",
+                  "    pm.environment.set('board_option_id', defaultOption.id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/rooms/by-site/{{site_id}}/public",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "rooms", "by-site", "{{site_id}}", "public"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create room",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201 || pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  const body = json.data !== undefined ? json.data : json;",
+                  "  if (body && body.id) {",
+                  "    pm.collectionVariables.set('room_id', body.id);",
+                  "    pm.environment.set('room_id', body.id);",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"site_id\": {{site_id}},\n  \"name\": \"Habitación doble\",\n  \"price_per_night\": 85,\n  \"max_guests\": 2,\n  \"max_pets\": 1,\n  \"is_active\": true,\n  \"board_options\": [\n    {\n      \"code\": \"room_only\",\n      \"description\": \"Tarifa base sin comidas\",\n      \"price\": 0,\n      \"is_included\": true,\n      \"is_default\": true,\n      \"is_active\": true,\n      \"sort_order\": 0\n    },\n    {\n      \"code\": \"breakfast_included\",\n      \"description\": \"Desayuno buffet\",\n      \"price\": 8,\n      \"is_included\": false,\n      \"is_default\": false,\n      \"is_active\": true,\n      \"sort_order\": 1\n    }\n  ],\n  \"extras\": [\n    {\n      \"name\": \"Parking cubierto\",\n      \"pricing_mode\": \"per_night\",\n      \"price\": 12,\n      \"is_active\": true,\n      \"sort_order\": 0\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/rooms",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "rooms"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update room",
+          "request": {
+            "method": "PATCH",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Habitación doble actualizada\",\n  \"price_per_night\": 90,\n  \"board_options\": [\n    {\n      \"code\": \"room_only\",\n      \"description\": \"Tarifa base sin comidas\",\n      \"price\": 0,\n      \"is_included\": true,\n      \"is_default\": true,\n      \"is_active\": true,\n      \"sort_order\": 0\n    },\n    {\n      \"code\": \"breakfast_included\",\n      \"description\": \"Desayuno buffet\",\n      \"price\": 10,\n      \"is_included\": false,\n      \"is_default\": false,\n      \"is_active\": true,\n      \"sort_order\": 1\n    }\n  ],\n  \"extras\": [\n    {\n      \"name\": \"Parking cubierto\",\n      \"pricing_mode\": \"per_night\",\n      \"price\": 15,\n      \"is_active\": true,\n      \"sort_order\": 0\n    }\n  ]\n}",
+              "options": { "raw": { "language": "json" } }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/rooms/{{room_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "rooms", "{{room_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Availability by room range",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/availability/by-room/{{room_id}}/range?from={{range_from}}&to={{range_to}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "availability", "by-room", "{{room_id}}", "range"],
+              "query": [
+                { "key": "from", "value": "{{range_from}}" },
+                { "key": "to", "value": "{{range_to}}" }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Blocks by room range",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/blocks/by-room/{{room_id}}/range?from={{range_from}}&to={{range_to}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "blocks", "by-room", "{{room_id}}", "range"],
+              "query": [
+                { "key": "from", "value": "{{range_from}}" },
+                { "key": "to", "value": "{{range_to}}" }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
     {
       "name": "Health",
       "item": [
@@ -107,7 +261,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"day\": 7,\n  \"site_id\": {{site_id}},\n  \"is_available\": true,\n  \"min_nights\": 1,\n  \"max_nights\": 30\n}",
+              "raw": "{\n  \"day\": 7,\n  \"site_id\": {{site_id}},\n  \"room_id\": \"{{room_id}}\",\n  \"is_available\": true,\n  \"min_nights\": 1,\n  \"max_nights\": 30\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -255,7 +409,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"site_id\": {{site_id}},\n  \"start_date\": \"2026-05-21\",\n  \"end_date\": \"2026-05-28\",\n  \"type\": \"manual_block\",\n  \"reference_id\": \"550e8400-e29b-41d4-a716-446655440000\"\n}",
+              "raw": "{\n  \"site_id\": {{site_id}},\n  \"room_id\": \"{{room_id}}\",\n  \"start_date\": \"2026-05-21\",\n  \"end_date\": \"2026-05-28\",\n  \"type\": \"manual_block\",\n  \"reference_id\": \"550e8400-e29b-41d4-a716-446655440000\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -441,6 +595,182 @@
           "response": []
         },
         {
+          "name": "Quote reservation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"site_id\": {{site_id}},\n  \"room_id\": \"{{room_id}}\",\n  \"checkin\": \"{{range_from}}\",\n  \"checkout\": \"{{range_to}}\",\n  \"guests\": 2,\n  \"pets\": 0,\n  \"board_option_id\": \"{{board_option_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/reservations/quote",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "reservations", "quote"]
+            },
+            "description": "Valida disponibilidad y calcula precio: base (noches × price_per_night) + suplemento de pensión (0 si is_included, si no price × noches).\n\n**Body opcional:** `board_option_id` (uuid). Si se omite, usa la pensión `is_default`.\n\n**Respuesta:** `{ valid, nights, nightly_rate, base_subtotal, board_amount, subtotal, commission, total, board_option, min_nights, max_nights, errors[] }`"
+          },
+          "response": []
+        },
+        {
+          "name": "Checkout reservation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201 || pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  const body = json.data !== undefined ? json.data : json;",
+                  "  if (body && body.reservation_id) {",
+                  "    pm.collectionVariables.set('reservation_id', String(body.reservation_id));",
+                  "    pm.environment.set('reservation_id', String(body.reservation_id));",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"site_id\": {{site_id}},\n  \"room_id\": \"{{room_id}}\",\n  \"checkin\": \"{{range_from}}\",\n  \"checkout\": \"{{range_to}}\",\n  \"guests\": 2,\n  \"pets\": 0,\n  \"board_option_id\": \"{{board_option_id}}\",\n  \"guest_name\": \"Test Huésped\",\n  \"guest_email\": \"{{stripe_test_email}}\",\n  \"guest_phone\": \"+34600000000\",\n  \"user_id\": {{user_id}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/reservations/checkout",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "reservations", "checkout"]
+            },
+            "description": "Crea reserva pending + sesión Stripe Checkout. Respuesta: `reservation_id`, `checkout_url`, `expires_at`."
+          },
+          "response": []
+        },
+        {
+          "name": "Get reservation (public)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/reservations/{{reservation_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "reservations", "{{reservation_id}}"]
+            },
+            "description": "Resumen público para página de éxito (`code`, fechas, status, total)."
+          },
+          "response": []
+        },
+        {
+          "name": "Quote reservation",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"site_id\": {{site_id}},\n  \"room_id\": \"{{room_id}}\",\n  \"checkin\": \"{{range_from}}\",\n  \"checkout\": \"{{range_to}}\",\n  \"guests\": 2,\n  \"pets\": 0,\n  \"board_option_id\": \"{{board_option_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/reservations/quote",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "reservations", "quote"]
+            },
+            "description": "Cotiza una estancia: valida disponibilidad, bloqueos, solapes, Stripe Connect y pensión seleccionada.\n\n**Body:** `site_id`, `room_id`, `checkin`, `checkout` (`YYYY-MM-DD`), `guests`, `pets`, `board_option_id?`.\n\n**Respuesta:** `{ valid, nights, nightly_rate, base_subtotal, board_amount, subtotal, commission, total, board_option, min_nights, max_nights, errors[] }`"
+          },
+          "response": []
+        },
+        {
+          "name": "Checkout reservation",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201 || pm.response.code === 200) {",
+                  "  const json = pm.response.json();",
+                  "  const body = json.data !== undefined ? json.data : json;",
+                  "  if (body && body.reservation_id) {",
+                  "    pm.collectionVariables.set('reservation_id', String(body.reservation_id));",
+                  "    pm.environment.set('reservation_id', String(body.reservation_id));",
+                  "  }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"site_id\": {{site_id}},\n  \"room_id\": \"{{room_id}}\",\n  \"checkin\": \"{{range_from}}\",\n  \"checkout\": \"{{range_to}}\",\n  \"guests\": 2,\n  \"pets\": 0,\n  \"board_option_id\": \"{{board_option_id}}\",\n  \"guest_name\": \"Huésped Test\",\n  \"guest_email\": \"{{stripe_test_email}}\",\n  \"guest_phone\": \"600000000\",\n  \"guest_notes\": \"Reserva de prueba Postman\",\n  \"user_id\": {{user_id}}\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/reservations/checkout",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "reservations", "checkout"]
+            },
+            "description": "Crea reserva pending, recalcula quote server-side y devuelve URL Stripe Checkout.\n\n**Respuesta:** `{ reservation_id, checkout_url, expires_at }`"
+          },
+          "response": []
+        },
+        {
+          "name": "Get reservation by id",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/v1/reservations/{{reservation_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "reservations", "{{reservation_id}}"]
+            },
+            "description": "Consulta pública de reserva para pantalla de éxito (polling post-pago).\n\n**Respuesta:** `{ id, code, status, payment_status, checkin, checkout, total, guest_name, ... }`"
+          },
+          "response": []
+        },
+        {
           "name": "Create reservation",
           "event": [
             {
@@ -470,7 +800,7 @@
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"site_id\": {{site_id}},\n  \"source\": \"internal\",\n  \"user_id\": {{user_id}},\n  \"checkin\": \"2026-05-21\",\n  \"checkout\": \"2026-05-25\",\n  \"guests\": 2,\n  \"pets\": 0,\n  \"subtotal\": 500,\n  \"commission\": 50\n}",
+              "raw": "{\n  \"site_id\": {{site_id}},\n  \"room_id\": \"{{room_id}}\",\n  \"source\": \"internal\",\n  \"user_id\": {{user_id}},\n  \"checkin\": \"2026-05-21\",\n  \"checkout\": \"2026-05-25\",\n  \"guests\": 2,\n  \"pets\": 0,\n  \"subtotal\": 500,\n  \"commission\": 50\n}",
               "options": {
                 "raw": {
                   "language": "json"

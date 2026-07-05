@@ -4,6 +4,4 @@ export class CreateExpressAccountDto {
   @IsInt()
   @IsPositive()
   user_id!: number;
-
-
 }

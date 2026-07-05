@@ -1,8 +1,13 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Between, Repository } from "typeorm";
 
 import { AvailabilityEntity } from "@/contexts/availability/entities/availability.entity";
+import { RoomsService } from "@/contexts/rooms/services/rooms.service";
 
 import { MysqlService } from "../../shared/services/mysql.service";
 import { CreateAvailabilityDto } from "../dto/create-availability.dto";
@@ -14,9 +19,20 @@ export class AvailabilityService {
     @InjectRepository(AvailabilityEntity)
     private readonly availabilityRepository: Repository<AvailabilityEntity>,
     private readonly mysqlService: MysqlService,
+    private readonly roomsService: RoomsService,
   ) {}
 
   async create(create_dto: CreateAvailabilityDto) {
+    const room = await this.roomsService.findOneForSite(
+      create_dto.room_id,
+      create_dto.site_id,
+    );
+    if (!room.is_active) {
+      throw new BadRequestException(
+        "No se puede generar disponibilidad para una habitación inactiva.",
+      );
+    }
+
     const base_date = new Date();
     base_date.setHours(0, 0, 0, 0);
     if (create_dto.anchor_date) {
@@ -41,6 +57,7 @@ export class AvailabilityService {
 
     const rows_payload = days_numbers.map(date_string => ({
       site_id: create_dto.site_id,
+      room_id: create_dto.room_id,
       min_nights: create_dto.min_nights,
       max_nights: create_dto.max_nights,
       is_available: is_available_initial,
@@ -96,6 +113,21 @@ export class AvailabilityService {
     });
   }
 
+  async findByRoomAndDateRange({
+    room_id,
+    from_date,
+    to_date,
+  }: {
+    room_id: string;
+    from_date: Date;
+    to_date: Date;
+  }) {
+    return this.availabilityRepository.find({
+      where: { room_id, date: Between(from_date, to_date) },
+      order: { date: "ASC" },
+    });
+  }
+
   async findBySiteAndIsoRange(
     site_id: number,
     from_iso: string,
@@ -108,23 +140,44 @@ export class AvailabilityService {
     });
   }
 
+  async findByRoomAndIsoRange(
+    room_id: string,
+    from_iso: string,
+    to_iso: string,
+  ): Promise<AvailabilityEntity[]> {
+    return this.findByRoomAndDateRange({
+      room_id,
+      from_date: new Date(from_iso),
+      to_date: new Date(to_iso),
+    });
+  }
+
   async checkAvailability({
     site_id,
+    room_id,
     from_date,
     to_date,
   }: {
     site_id: number;
+    room_id: string;
     from_date: Date;
     to_date: Date;
   }) {
-    const availability = await this.findBySiteAndDateRange({
-      site_id,
+    const availability = await this.findByRoomAndDateRange({
+      room_id,
       from_date,
       to_date,
     });
     if (availability.length === 0) {
       throw new NotFoundException(
         `El alojamiento no está disponible para las fechas ${from_date.toISOString()} a ${to_date.toISOString()}`,
+      );
+    }
+
+    const siteMismatch = availability.some(row => row.site_id !== site_id);
+    if (siteMismatch) {
+      throw new NotFoundException(
+        `La habitación no pertenece al alojamiento ${site_id}`,
       );
     }
 

@@ -9,6 +9,7 @@ import { Repository } from "typeorm";
 import { omit_undefined } from "@/shared/utils/omit-undefined";
 
 import { BlocksEntity } from "@/contexts/blocks/entities/blocks.entity";
+import { RoomsService } from "@/contexts/rooms/services/rooms.service";
 
 import { CreateBlocksDto } from "../dto/create-blocks.dto";
 import { UpdateBlocksDto } from "../dto/update-blocks.dto";
@@ -18,11 +19,18 @@ export class BlocksService {
   constructor(
     @InjectRepository(BlocksEntity)
     private readonly blocks_repository: Repository<BlocksEntity>,
+    private readonly roomsService: RoomsService,
   ) {}
 
   async create(create_dto: CreateBlocksDto) {
+    await this.roomsService.findOneForSite(
+      create_dto.room_id,
+      create_dto.site_id,
+    );
+
     const overlapping_block = await this.find_blocking_overlap(
       create_dto.site_id,
+      create_dto.room_id,
       create_dto.start_date,
       create_dto.end_date,
     );
@@ -41,10 +49,6 @@ export class BlocksService {
     });
   }
 
-  /**
-   * Todos los bloqueos del alojamiento, opcionalmente solo los que siguen vigentes (end_date >= hoy ISO).
-   * El listado del host no debe depender del mes del calendario.
-   */
   async find_by_site(
     site_id: number,
     options: { only_future?: boolean } = {},
@@ -63,7 +67,6 @@ export class BlocksService {
     return qb.getMany();
   }
 
-  /** Bloques que solapan el rango de consulta inclusive [from_iso, to_iso]. */
   async find_by_site_and_range(
     site_id: number,
     from_iso: string,
@@ -79,15 +82,31 @@ export class BlocksService {
       .getMany();
   }
 
-  /** ¿Existe bloque activo que interseca [checkin, checkout] mismo criterio que reservas? */
+  async find_by_room_and_range(
+    room_id: string,
+    from_iso: string,
+    to_iso: string,
+  ): Promise<BlocksEntity[]> {
+    return this.blocks_repository
+      .createQueryBuilder("b")
+      .where("b.room_id = :room_id", { room_id })
+      .andWhere("b.start_date <= :to_iso", { to_iso })
+      .andWhere("b.end_date >= :from_iso", { from_iso })
+      .orderBy("b.start_date", "ASC")
+      .addOrderBy("b.id", "ASC")
+      .getMany();
+  }
+
   async find_blocking_overlap(
     site_id: number,
+    room_id: string,
     checkin: string,
     checkout: string,
   ): Promise<BlocksEntity | null> {
     return this.blocks_repository
       .createQueryBuilder("b")
       .where("b.site_id = :site_id", { site_id })
+      .andWhere("b.room_id = :room_id", { room_id })
       .andWhere("b.start_date < :checkout", { checkout })
       .andWhere("b.end_date > :checkin", { checkin })
       .getOne();

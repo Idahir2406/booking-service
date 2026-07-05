@@ -3,6 +3,8 @@ import type { StripeWebhookEvent } from "../types/stripe-webhook-event.type";
 import { Injectable, Logger } from "@nestjs/common";
 
 import { ReservationService } from "../../reservations/services/reservation.service";
+import { ReservationEmailService } from "../../reservations/services/reservation-email.service";
+import { StripeService } from "../../stripe/services/stripe.service";
 
 interface CheckoutSessionPayload {
   id: string;
@@ -16,7 +18,11 @@ interface CheckoutSessionPayload {
 export class ReservationWebhookService {
   private readonly logger = new Logger(ReservationWebhookService.name);
 
-  constructor(private readonly reservationService: ReservationService) {}
+  constructor(
+    private readonly reservationService: ReservationService,
+    private readonly stripeService: StripeService,
+    private readonly reservationEmailService: ReservationEmailService,
+  ) {}
 
   async handleCheckoutCompleted(event: StripeWebhookEvent) {
     if (event.type !== "checkout.session.completed") {
@@ -56,12 +62,40 @@ export class ReservationWebhookService {
     }
 
     try {
-      await this.reservationService.activateFromPayment({
+      const reservation = await this.reservationService.activateFromPayment({
         reservationId,
         checkoutSessionId: session.id,
         paymentIntentId,
         amountPaidCents: session.amount_total,
       });
+
+      const site = await this.reservationService.getSiteById(
+        reservation.site_id,
+      );
+      const hostUserId = site.user_id ?? 0;
+
+      if (hostUserId > 0) {
+        try {
+          await this.stripeService.transferHostPayout({
+            paymentIntentId,
+            hostUserId,
+            totalPaidCents: session.amount_total,
+          });
+        } catch (transferError) {
+          this.logger.error(
+            `Failed to transfer payout for reservation ${reservationId}`,
+            transferError instanceof Error
+              ? transferError.stack
+              : String(transferError),
+          );
+        }
+      }
+
+      await this.reservationEmailService.sendConfirmationEmail(
+        reservation,
+        site.name ?? "Alojamiento",
+        site.email ?? "",
+      );
     } catch (error) {
       this.logger.error(
         `Failed to activate reservation ${reservationId} from checkout session ${session.id}`,

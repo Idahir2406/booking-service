@@ -54,6 +54,21 @@ export class BlocksController {
     return rows;
   }
 
+  /** Calendario por habitación. */
+  @Get("by-room/:room_id/range")
+  async find_by_room_range(
+    @Param("room_id", ParseUUIDPipe) room_id: string,
+    @Query() range: DateRangeQueryDto,
+  ): Promise<BlocksEntity[]> {
+    const rows = await this.blocks_service.find_by_room_and_range(
+      room_id,
+      range.from,
+      range.to,
+    );
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- TypeORM query builder
+    return rows;
+  }
+
   /** Listado del host: todos los bloqueos del site, o solo vigentes (`end_date` desde hoy, ISO servidor). */
   @Get("by-site/:site_id")
   find_by_site(

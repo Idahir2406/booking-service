@@ -1,4 +1,4 @@
-import { Module } from "@nestjs/common";
+import { forwardRef, Module } from "@nestjs/common";
 
 import { ReservationModule } from "../reservations/reservation.module";
 import { MysqlService } from "../shared/services/mysql.service";
@@ -10,6 +10,6 @@ import { UserProfilesService } from "./services/user-profiles.service";
   controllers: [StripeController],
   providers: [StripeService, UserProfilesService, MysqlService],
   exports: [StripeService, UserProfilesService],
-  imports: [ReservationModule],
+  imports: [forwardRef(() => ReservationModule)],
 })
 export class StripeModule {}

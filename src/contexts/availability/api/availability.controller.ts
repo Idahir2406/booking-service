@@ -37,7 +37,7 @@ export class AvailabilityController {
     return this.availability_service.findAll();
   }
 
-  /** Calendario: disponibilidad por alojamiento y rango inclusive (YYYY-MM-DD). */
+  /** Calendario agregado: todas las habitaciones del site. */
   @Get("by-site/:site_id/range")
   async findBySiteAndRange(
     @Param("site_id", ParseIntPipe) site_id: number,
@@ -45,6 +45,21 @@ export class AvailabilityController {
   ): Promise<AvailabilityEntity[]> {
     const rows = await this.availability_service.findBySiteAndIsoRange(
       site_id,
+      range.from,
+      range.to,
+    );
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- TypeORM Repository
+    return rows;
+  }
+
+  /** Calendario por habitación. */
+  @Get("by-room/:room_id/range")
+  async findByRoomAndRange(
+    @Param("room_id", ParseUUIDPipe) room_id: string,
+    @Query() range: DateRangeQueryDto,
+  ): Promise<AvailabilityEntity[]> {
+    const rows = await this.availability_service.findByRoomAndIsoRange(
+      room_id,
       range.from,
       range.to,
     );

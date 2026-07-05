@@ -1,3 +1,5 @@
+import type { ReservationWithRoomName } from "../dto/reservation-with-room.dto";
+
 import {
   Body,
   Controller,
@@ -11,7 +13,10 @@ import {
 } from "@nestjs/common";
 
 import { DateRangeQueryDto } from "../../shared/dto/date-range-query.dto";
+import { CheckoutReservationDto } from "../dto/checkout-reservation.dto";
 import { CreateReservationDto } from "../dto/create-reservation.dto";
+import { QuoteReservationDto } from "../dto/quote-reservation.dto";
+import { ReservationPublicSummaryDto } from "../dto/reservation-public-summary.dto";
 import { ReservationEntity } from "../entities/reservation.entity";
 import { ReservationService } from "../services/reservation.service";
 
@@ -26,7 +31,7 @@ export class ReservationController {
   async findBySiteRange(
     @Param("site_id", ParseIntPipe) site_id: number,
     @Query() range: DateRangeQueryDto,
-  ): Promise<ReservationEntity[]> {
+  ): Promise<ReservationWithRoomName[]> {
     const rows = await this.reservationService.find_active_by_site_and_range(
       site_id,
       range.from,
@@ -36,9 +41,26 @@ export class ReservationController {
     return rows;
   }
 
+  @Post("quote")
+  quote(@Body() quote_dto: QuoteReservationDto) {
+    return this.reservationService.quoteReservation(quote_dto);
+  }
+
+  @Post("checkout")
+  checkout(@Body() checkout_dto: CheckoutReservationDto) {
+    return this.reservationService.checkout(checkout_dto);
+  }
+
   @Post()
   create(@Body() create_dto: CreateReservationDto) {
     return this.reservationService.create(create_dto);
+  }
+
+  @Get(":id")
+  getPublicSummary(
+    @Param("id", ParseIntPipe) id: number,
+  ): Promise<ReservationPublicSummaryDto> {
+    return this.reservationService.getPublicSummary(id);
   }
 
   @Patch(":id")

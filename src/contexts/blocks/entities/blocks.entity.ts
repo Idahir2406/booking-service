@@ -3,17 +3,27 @@ import {
   CreateDateColumn,
   DeleteDateColumn,
   Entity,
+  Index,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from "typeorm";
 
 @Entity("blocks")
+@Index("idx_blocks_site_room_dates", [
+  "site_id",
+  "room_id",
+  "start_date",
+  "end_date",
+])
 export class BlocksEntity {
   @PrimaryGeneratedColumn("uuid")
   id!: string;
 
   @Column({ type: "int" })
   site_id!: number;
+
+  @Column({ type: "uuid" })
+  room_id!: string;
 
   @Column({ type: "date" })
   start_date!: string;

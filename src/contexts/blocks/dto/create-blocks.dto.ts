@@ -11,6 +11,9 @@ export class CreateBlocksDto {
   @Min(1)
   site_id!: number;
 
+  @IsUUID()
+  room_id!: string;
+
   @IsDateString()
   start_date!: string;
 

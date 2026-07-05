@@ -15,14 +15,16 @@ const envSchema = z.object({
   DB_DATABASE: z.string(),
   COMMISSION_PERCENTAGE: z.coerce.number().default(0.1),
   CURRENCY: z.string().default("EUR"),
-  // 10minutes
+  // 15 minutes
   PENDING_RESERVATION_EXPIRATION_TIME: z.coerce
     .number()
-    .default(1000 * 60 * 10),
+    .default(1000 * 60 * 15),
   DB_PREFIX: z.string().default("v4p_j"),
   STRIPE_API_KEY: z.string(),
   STRIPE_WEBHOOK_SECRET: z.string(),
   FRONTEND_URL: z.url().default("http://localhost:3000"),
+  BOOKING_WEB_URL: z.url().optional(),
+  BOOKING_EMAIL_TOKEN: z.string().optional(),
 });
 
 export const envs = envSchema.parse(process.env);

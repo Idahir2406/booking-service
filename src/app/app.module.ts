@@ -10,6 +10,7 @@ import { LoggerModule } from "@/shared/logger/logger.module";
 import { AvailabilityModule } from "@/contexts/availability/availability.module";
 import { BlocksModule } from "@/contexts/blocks/blocks.module";
 import { ReservationModule } from "@/contexts/reservations/reservation.module";
+import { RoomsModule } from "@/contexts/rooms/rooms.module";
 import { envs } from "@/contexts/shared/configs/envs";
 
 import { StripeModule } from "../contexts/stripe/stripe.module";
@@ -31,6 +32,7 @@ import { WebhookModule } from "../contexts/webhook/webhook.module";
     AvailabilityModule,
     BlocksModule,
     ReservationModule,
+    RoomsModule,
     WebhookModule,
   ],
 })
