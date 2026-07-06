@@ -23,6 +23,7 @@
     "unicorn/prevent-abbreviations": "off",
     "unicorn/empty-brace-spaces": "off",
     "prettier/prettier": "warn",
+    "unicorn/no-null": "off",
     "@typescript-eslint/no-unsafe-assignment": "off",
     "@typescript-eslint/no-unsafe-call": "off",
     "@typescript-eslint/no-unsafe-member-access": "off",

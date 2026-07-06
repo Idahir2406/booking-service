@@ -1,3 +1,5 @@
+import type { ReservationBoardSnapshot } from "../entities/reservation.entity";
+
 export interface ReservationWithRoomName {
   id: number;
   site_id: number;
@@ -14,14 +16,27 @@ export interface ReservationWithRoomName {
   checkout: string;
   guests: number;
   pets: number;
+  board_option_id?: string;
+  board_snapshot?: ReservationBoardSnapshot | null;
+  extras_snapshot?: unknown;
   subtotal: number | null;
   commission: number | null;
   total: number | null;
+  nights?: number;
+  base_subtotal?: number | null;
   status: string;
   payment_status: string;
+  payout_status?: string | null;
+  finalized_at?: Date | null;
+  feedback_deadline_at?: Date | null;
+  payout_released_at?: Date | null;
+  cancelled_at?: Date | null;
+  cancel_reason?: string | null;
+  refund_on_cancel?: boolean | null;
   expiration_date: Date;
   stripe_checkout_session_id?: string;
   stripe_payment_intent_id?: string;
+  stripe_transfer_id?: string | null;
   paid_at?: Date;
   created_at: Date;
   updated_at: Date;

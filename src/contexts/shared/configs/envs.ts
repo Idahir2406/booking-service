@@ -25,6 +25,9 @@ const envSchema = z.object({
   FRONTEND_URL: z.url().default("http://localhost:3000"),
   BOOKING_WEB_URL: z.url().optional(),
   BOOKING_EMAIL_TOKEN: z.string().optional(),
+  FEEDBACK_PAYOUT_DELAY_HOURS: z.coerce.number().default(24),
+  BOOKING_DEV_EMAIL: z.string().email().default("idairreyes@gmail.com"),
+  BOOKING_ADMIN_EMAIL: z.string().email().default("reservas@viajes4patas.com"),
 });
 
 export const envs = envSchema.parse(process.env);

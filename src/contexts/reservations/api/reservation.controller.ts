@@ -1,4 +1,5 @@
 import type { ReservationWithRoomName } from "../dto/reservation-with-room.dto";
+import type { FeedbackSummaryDto } from "../dto/feedback-summary.dto";
 
 import {
   Body,
@@ -13,11 +14,15 @@ import {
 } from "@nestjs/common";
 
 import { DateRangeQueryDto } from "../../shared/dto/date-range-query.dto";
+import { CancelReservationDto } from "../dto/cancel-reservation.dto";
 import { CheckoutReservationDto } from "../dto/checkout-reservation.dto";
 import { CreateReservationDto } from "../dto/create-reservation.dto";
+import { FinalizeReservationDto } from "../dto/finalize-reservation.dto";
 import { QuoteReservationDto } from "../dto/quote-reservation.dto";
 import { ReservationPublicSummaryDto } from "../dto/reservation-public-summary.dto";
-import { ReservationEntity } from "../entities/reservation.entity";
+import { SubmitFeedbackDto } from "../dto/submit-feedback.dto";
+import { ReservationFeedbackService } from "../services/reservation-feedback.service";
+import { ReservationLifecycleService } from "../services/reservation-lifecycle.service";
 import { ReservationService } from "../services/reservation.service";
 
 @Controller({
@@ -25,7 +30,11 @@ import { ReservationService } from "../services/reservation.service";
   version: "1",
 })
 export class ReservationController {
-  constructor(private readonly reservationService: ReservationService) {}
+  constructor(
+    private readonly reservationService: ReservationService,
+    private readonly lifecycleService: ReservationLifecycleService,
+    private readonly feedbackService: ReservationFeedbackService,
+  ) {}
 
   @Get("by-site/:site_id/range")
   async findBySiteRange(
@@ -41,6 +50,19 @@ export class ReservationController {
     return rows;
   }
 
+  @Get("feedback/:token")
+  getFeedbackSummary(@Param("token") token: string): Promise<FeedbackSummaryDto> {
+    return this.feedbackService.getFeedbackSummary(token);
+  }
+
+  @Post("feedback/:token")
+  submitFeedback(
+    @Param("token") token: string,
+    @Body() dto: SubmitFeedbackDto,
+  ) {
+    return this.feedbackService.submitFeedback(token, dto);
+  }
+
   @Post("quote")
   quote(@Body() quote_dto: QuoteReservationDto) {
     return this.reservationService.quoteReservation(quote_dto);
@@ -54,6 +76,22 @@ export class ReservationController {
   @Post()
   create(@Body() create_dto: CreateReservationDto) {
     return this.reservationService.create(create_dto);
+  }
+
+  @Post(":id/cancel")
+  cancelReservation(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: CancelReservationDto,
+  ) {
+    return this.lifecycleService.cancelReservation(id, dto);
+  }
+
+  @Post(":id/finalize")
+  finalizeReservation(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: FinalizeReservationDto,
+  ) {
+    return this.lifecycleService.finalizeReservation(id, dto.site_id);
   }
 
   @Get(":id")

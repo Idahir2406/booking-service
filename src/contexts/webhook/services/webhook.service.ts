@@ -34,6 +34,18 @@ export class WebhookService {
         await this.reservationWebhookService.handleCheckoutExpired(event);
         break;
       }
+      case "charge.refunded": {
+        await this.reservationWebhookService.handleChargeRefunded(event);
+        break;
+      }
+      case "charge.dispute.created": {
+        await this.reservationWebhookService.handleChargeDisputeCreated(event);
+        break;
+      }
+      case "transfer.created": {
+        await this.reservationWebhookService.handleTransferCreated(event);
+        break;
+      }
       case "account.updated": {
         await this.expressAccountsService.handleAccountUpdated(event);
         break;
@@ -56,19 +68,32 @@ export class WebhookService {
 
   private extractReservationId(event: StripeWebhookEvent): number | undefined {
     if (
-      event.type !== "checkout.session.completed" &&
-      event.type !== "checkout.session.expired"
+      event.type === "checkout.session.completed" ||
+      event.type === "checkout.session.expired"
     ) {
-      return undefined;
+      const session = event.data.object as {
+        metadata?: { reservation_id?: string };
+      };
+      const reservationId = Number(session.metadata?.reservation_id);
+      if (!reservationId || Number.isNaN(reservationId)) {
+        return undefined;
+      }
+      return reservationId;
     }
 
-    const session = event.data.object as {
-      metadata?: { reservation_id?: string };
-    };
-    const reservationId = Number(session.metadata?.reservation_id);
-    if (!reservationId || Number.isNaN(reservationId)) {
-      return undefined;
+    if (
+      event.type === "charge.refunded" ||
+      event.type === "charge.dispute.created"
+    ) {
+      const obj = event.data.object as {
+        metadata?: { reservation_id?: string };
+      };
+      const fromMeta = Number(obj.metadata?.reservation_id);
+      if (fromMeta && !Number.isNaN(fromMeta)) {
+        return fromMeta;
+      }
     }
-    return reservationId;
+
+    return undefined;
   }
 }

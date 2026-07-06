@@ -18,10 +18,23 @@ export interface ReservationBoardSnapshot {
 
 export const source_values = ["internal", "airbnb", "booking", "vrbo"] as const;
 export type SourceValue = (typeof source_values)[number];
-export const status_values = ["pending", "confirmed", "cancelled"] as const;
+export const status_values = [
+  "pending",
+  "confirmed",
+  "cancelled",
+  "finalized",
+] as const;
 export type StatusValue = (typeof status_values)[number];
-export const payment_status_values = ["pending", "paid", "refunded"] as const;
+export const payment_status_values = [
+  "pending",
+  "paid",
+  "refunded",
+  "partially_refunded",
+] as const;
 export type PaymentStatusValue = (typeof payment_status_values)[number];
+export const payout_status_values = ["held", "released", "blocked"] as const;
+export type PayoutStatusValue = (typeof payout_status_values)[number];
+
 @Entity("reservations")
 @Index("idx_reservations_site_room", ["site_id", "room_id"])
 export class ReservationEntity {
@@ -90,6 +103,37 @@ export class ReservationEntity {
 
   @Column({ type: "enum", enum: payment_status_values })
   payment_status!: PaymentStatusValue;
+
+  @Column({
+    type: "enum",
+    enum: payout_status_values,
+    nullable: true,
+  })
+  payout_status?: PayoutStatusValue;
+
+  @Column({ type: "timestamp", nullable: true })
+  finalized_at?: Date;
+
+  @Column({ type: "timestamp", nullable: true })
+  feedback_deadline_at?: Date;
+
+  @Column({ type: "timestamp", nullable: true })
+  payout_released_at?: Date;
+
+  @Column({ type: "text", nullable: true })
+  stripe_transfer_id?: string;
+
+  @Column({ type: "text", nullable: true })
+  stripe_refund_id?: string;
+
+  @Column({ type: "timestamp", nullable: true })
+  cancelled_at?: Date;
+
+  @Column({ type: "text", nullable: true })
+  cancel_reason?: string;
+
+  @Column({ type: "boolean", nullable: true })
+  refund_on_cancel?: boolean;
 
   @Column({ type: "timestamp" })
   expiration_date!: Date;

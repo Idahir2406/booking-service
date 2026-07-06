@@ -244,4 +244,20 @@ export class StripeService {
       source_transaction: chargeId,
     });
   }
+
+  async refundPaymentIntent(input: {
+    paymentIntentId: string;
+    amountCents?: number;
+  }) {
+    const params: {
+      payment_intent: string;
+      amount?: number;
+    } = {
+      payment_intent: input.paymentIntentId,
+    };
+    if (input.amountCents !== undefined && input.amountCents > 0) {
+      params.amount = input.amountCents;
+    }
+    return this.stripe.refunds.create(params);
+  }
 }

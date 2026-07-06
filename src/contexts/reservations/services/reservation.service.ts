@@ -76,7 +76,7 @@ export class ReservationService {
       ),
     )
     private readonly stripeService: StripeService,
-  ) {}
+  ) { }
 
   async quoteReservation(
     dto: QuoteReservationDto,
@@ -133,10 +133,10 @@ export class ReservationService {
       lastNight === undefined
         ? []
         : await this.availabilityService.findByRoomAndIsoRange(
-            dto.room_id,
-            dto.checkin,
-            lastNight,
-          );
+          dto.room_id,
+          dto.checkin,
+          lastNight,
+        );
 
     const availabilityByDate = new Map(
       availabilityRows.map(row => [this.formatIsoDate(row.date), row]),
@@ -222,8 +222,8 @@ export class ReservationService {
 
     let boardOption = null as
       | Awaited<
-          ReturnType<RoomBoardOptionsService["findActiveBoardOptionsByRoom"]>
-        >[number]
+        ReturnType<RoomBoardOptionsService["findActiveBoardOptionsByRoom"]>
+      >[number]
       | null;
 
     if (boardOptions.length === 0) {
@@ -262,9 +262,9 @@ export class ReservationService {
       boardOption === null
         ? 0
         : this.roomBoardOptionsService.calculateBoardAmountForOption(
-            boardOption,
-            nights,
-          );
+          boardOption,
+          nights,
+        );
 
     const activeExtras =
       await this.roomExtrasService.findActiveExtrasByRoom(dto.room_id);
@@ -332,15 +332,15 @@ export class ReservationService {
       guests: reservation.guests,
       pets: reservation.pets,
       subtotal:
-        reservation.subtotal === undefined || reservation.subtotal === null
+        reservation.subtotal || reservation.subtotal
           ? null
           : Number(reservation.subtotal),
       commission:
-        reservation.commission === undefined || reservation.commission === null
+        reservation.commission || reservation.commission
           ? null
           : Number(reservation.commission),
       total:
-        reservation.total === undefined || reservation.total === null
+        reservation.total || reservation.total
           ? null
           : Number(reservation.total),
       guest_name: reservation.guest_name ?? null,
@@ -434,10 +434,10 @@ export class ReservationService {
       lastNight === undefined
         ? []
         : await this.availabilityService.findByRoomAndIsoRange(
-            dto.room_id,
-            dto.checkin,
-            lastNight,
-          );
+          dto.room_id,
+          dto.checkin,
+          lastNight,
+        );
 
     const expirationDate = new Date(
       Date.now() + envs.PENDING_RESERVATION_EXPIRATION_TIME,
@@ -451,13 +451,13 @@ export class ReservationService {
         quote.board_option === null
           ? undefined
           : {
-              code: quote.board_option.code,
-              name: quote.board_option.name,
-              description: quote.board_option.description,
-              is_included: quote.board_option.is_included,
-              price: quote.board_option.price,
-              board_amount: quote.board_amount,
-            },
+            code: quote.board_option.code,
+            name: quote.board_option.name,
+            description: quote.board_option.description,
+            is_included: quote.board_option.is_included,
+            price: quote.board_option.price,
+            board_amount: quote.board_amount,
+          },
       extras_snapshot: [],
       source: "internal",
       user_id: dto.user_id ?? 0,
@@ -499,18 +499,18 @@ export class ReservationService {
     from_iso: string,
     to_iso: string,
   ): Promise<ReservationWithRoomName[]> {
+    console.log("find_active_by_site_and_range", site_id, from_iso, to_iso);
     const rows = await this.reservationRepository
       .createQueryBuilder("r")
       .where("r.site_id = :site_id", { site_id })
       .andWhere("r.status IN (:...sts)", {
-        sts: ["pending", "confirmed"],
+        sts: ["pending", "confirmed", "finalized"],
       })
       .andWhere("r.checkin <= :to_iso", { to_iso })
       .andWhere("r.checkout >= :from_iso", { from_iso })
       .orderBy("r.checkin", "ASC")
       .addOrderBy("r.id", "ASC")
       .getMany();
-
     const roomIds = [...new Set(rows.map(row => row.room_id))];
     const roomNames = new Map<string, string>();
     for (const roomId of roomIds) {
@@ -522,22 +522,32 @@ export class ReservationService {
       }
     }
 
-    return rows.map(row => ({
-      ...row,
-      subtotal:
-        row.subtotal === undefined || row.subtotal === null
-          ? null
-          : Number(row.subtotal),
-      commission:
-        row.commission === undefined || row.commission === null
-          ? null
-          : Number(row.commission),
-      total:
-        row.total === undefined || row.total === null
-          ? null
-          : Number(row.total),
-      room_name: roomNames.get(row.room_id) ?? null,
-    }));
+    console.log("rows", rows);
+
+    return rows.map(row => {
+      const subtotal = row.subtotal;
+      const checkinMs = new Date(row.checkin).getTime();
+      const checkoutMs = new Date(row.checkout).getTime();
+      const nights =
+        Number.isFinite(checkinMs) && Number.isFinite(checkoutMs)
+          ? Math.max(
+            0,
+            Math.round((checkoutMs - checkinMs) / (24 * 60 * 60 * 1000)),
+          )
+          : 0;
+      const boardAmount = row.board_snapshot?.board_amount ?? 0;
+      const base_subtotal = subtotal ? Math.max(0, subtotal - boardAmount) : 0;
+
+      return {
+        ...row,
+        subtotal,
+        commission: row.commission,
+        total: row.total,
+        room_name: roomNames.get(row.room_id) ?? null,
+        nights,
+        base_subtotal,
+      };
+    });
   }
 
   private async findOverlappingReservation(
@@ -550,7 +560,7 @@ export class ReservationService {
       where: {
         site_id,
         room_id,
-        status: In(["pending", "confirmed"] satisfies StatusValue[]),
+        status: In(["pending", "confirmed", "finalized"] satisfies StatusValue[]),
         checkin: LessThan(checkout),
         checkout: MoreThan(checkin),
       },
@@ -618,6 +628,7 @@ export class ReservationService {
       id: reservation.id,
       status: "confirmed" as StatusValue,
       payment_status: "paid" as PaymentStatusValue,
+      payout_status: "held",
       paid_at: paidAt,
       stripe_checkout_session_id: input.checkoutSessionId,
       stripe_payment_intent_id: input.paymentIntentId ?? undefined,
@@ -642,8 +653,12 @@ export class ReservationService {
       throw new NotFoundException(`Reservation with id ${id} not found`);
     }
     const saved = await this.reservationRepository.save(reservation);
-    await this.releaseAvailability(saved);
+    await this.releaseAvailabilityForReservation(saved);
     return saved;
+  }
+
+  async releaseAvailabilityForReservation(reservation: ReservationEntity) {
+    await this.releaseAvailability(reservation);
   }
 
   private async releaseAvailability(reservation: ReservationEntity) {

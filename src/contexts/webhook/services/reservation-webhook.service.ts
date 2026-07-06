@@ -1,10 +1,12 @@
 import type { StripeWebhookEvent } from "../types/stripe-webhook-event.type";
 
 import { Injectable, Logger } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
 
-import { ReservationService } from "../../reservations/services/reservation.service";
+import { ReservationEntity } from "../../reservations/entities/reservation.entity";
 import { ReservationEmailService } from "../../reservations/services/reservation-email.service";
-import { StripeService } from "../../stripe/services/stripe.service";
+import { ReservationService } from "../../reservations/services/reservation.service";
 
 interface CheckoutSessionPayload {
   id: string;
@@ -20,8 +22,9 @@ export class ReservationWebhookService {
 
   constructor(
     private readonly reservationService: ReservationService,
-    private readonly stripeService: StripeService,
     private readonly reservationEmailService: ReservationEmailService,
+    @InjectRepository(ReservationEntity)
+    private readonly reservationRepository: Repository<ReservationEntity>,
   ) {}
 
   async handleCheckoutCompleted(event: StripeWebhookEvent) {
@@ -72,29 +75,10 @@ export class ReservationWebhookService {
       const site = await this.reservationService.getSiteById(
         reservation.site_id,
       );
-      const hostUserId = site.user_id ?? 0;
 
-      if (hostUserId > 0) {
-        try {
-          await this.stripeService.transferHostPayout({
-            paymentIntentId,
-            hostUserId,
-            totalPaidCents: session.amount_total,
-          });
-        } catch (transferError) {
-          this.logger.error(
-            `Failed to transfer payout for reservation ${reservationId}`,
-            transferError instanceof Error
-              ? transferError.stack
-              : String(transferError),
-          );
-        }
-      }
-
-      await this.reservationEmailService.sendConfirmationEmail(
+      await this.reservationEmailService.sendPaymentConfirmedEmails(
         reservation,
-        site.name ?? "Alojamiento",
-        site.email ?? "",
+        site,
       );
     } catch (error) {
       this.logger.error(
@@ -133,6 +117,111 @@ export class ReservationWebhookService {
     await this.reservationService.cancel(reservationId);
     this.logger.log(
       `Cancelled pending reservation ${reservationId} after checkout session ${session.id} expired`,
+    );
+  }
+
+  async handleChargeRefunded(event: StripeWebhookEvent) {
+    if (event.type !== "charge.refunded") {
+      return;
+    }
+
+    const charge = event.data.object as {
+      payment_intent?: string | { id: string } | null;
+      amount_refunded?: number;
+    };
+    const paymentIntentId =
+      typeof charge.payment_intent === "string"
+        ? charge.payment_intent
+        : charge.payment_intent?.id;
+
+    if (!paymentIntentId) {
+      this.logger.warn("charge.refunded without payment_intent");
+      return;
+    }
+
+    const reservation = await this.reservationRepository.findOne({
+      where: { stripe_payment_intent_id: paymentIntentId },
+    });
+    if (!reservation) {
+      this.logger.warn(
+        `charge.refunded: no reservation for payment_intent ${paymentIntentId}`,
+      );
+      return;
+    }
+
+    if (reservation.payment_status === "refunded") {
+      return;
+    }
+
+    const updated = await this.reservationRepository.preload({
+      id: reservation.id,
+      payment_status: "refunded",
+    });
+    if (!updated) {
+      return;
+    }
+    const saved = await this.reservationRepository.save(updated);
+    const site = await this.reservationService.getSiteById(saved.site_id);
+    await this.reservationEmailService.sendRefundProcessedEmails(saved, site);
+  }
+
+  async handleChargeDisputeCreated(event: StripeWebhookEvent) {
+    if (event.type !== "charge.dispute.created") {
+      return;
+    }
+
+    const dispute = event.data.object as {
+      payment_intent?: string | { id: string } | null;
+      reason?: string;
+    };
+    const paymentIntentId =
+      typeof dispute.payment_intent === "string"
+        ? dispute.payment_intent
+        : dispute.payment_intent?.id;
+
+    if (!paymentIntentId) {
+      this.logger.warn("charge.dispute.created without payment_intent");
+      return;
+    }
+
+    const reservation = await this.reservationRepository.findOne({
+      where: { stripe_payment_intent_id: paymentIntentId },
+    });
+    if (!reservation) {
+      return;
+    }
+
+    const site = await this.reservationService.getSiteById(reservation.site_id);
+    await this.reservationEmailService.sendStripeDisputeEmails(
+      reservation,
+      site,
+      dispute.reason ?? "stripe_dispute",
+    );
+  }
+
+  async handleTransferCreated(event: StripeWebhookEvent) {
+    if (event.type !== "transfer.created") {
+      return;
+    }
+
+    const transfer = event.data.object as {
+      id: string;
+      source_transaction?: string | null;
+    };
+
+    if (!transfer.source_transaction) {
+      return;
+    }
+
+    const reservations = await this.reservationRepository.find({
+      where: { stripe_transfer_id: transfer.id },
+    });
+    if (reservations.length > 0) {
+      return;
+    }
+
+    this.logger.log(
+      `transfer.created ${transfer.id} — backup sync if needed (source_transaction=${transfer.source_transaction})`,
     );
   }
 }
