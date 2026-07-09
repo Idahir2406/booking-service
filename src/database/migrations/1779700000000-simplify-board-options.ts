@@ -36,9 +36,7 @@ export class SimplifyBoardOptions1779700000000 implements MigrationInterface {
     await queryRunner.query(
       `CREATE TYPE "public"."room_board_options_pricing_mode_enum" AS ENUM('included', 'per_night', 'per_night_per_guest', 'per_stay')`,
     );
-    await queryRunner.query(
-      `ALTER TABLE "room_board_options" ADD "name" text`,
-    );
+    await queryRunner.query(`ALTER TABLE "room_board_options" ADD "name" text`);
     await queryRunner.query(
       `ALTER TABLE "room_board_options" ADD "pricing_mode" "public"."room_board_options_pricing_mode_enum" NOT NULL DEFAULT 'per_night'`,
     );

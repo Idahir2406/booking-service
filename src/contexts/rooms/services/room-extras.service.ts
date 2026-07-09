@@ -14,7 +14,7 @@ export class RoomExtrasService {
 
   validateRoomExtras(extras: CreateRoomExtraDto[]): void {
     for (const extra of extras) {
-      if (!extra.name || !extra.name.trim()) {
+      if (!extra.name.trim()) {
         throw new BadRequestException(
           "Cada servicio extra debe tener un nombre.",
         );

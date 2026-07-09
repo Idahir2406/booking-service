@@ -41,6 +41,11 @@ export interface ActivateFromPaymentInput {
   amountPaidCents: number;
 }
 
+export interface ActivateFromPaymentResult {
+  reservation: ReservationEntity;
+  activated: boolean;
+}
+
 export interface QuoteReservationResult {
   valid: boolean;
   nights: number;
@@ -76,7 +81,7 @@ export class ReservationService {
       ),
     )
     private readonly stripeService: StripeService,
-  ) { }
+  ) {}
 
   async quoteReservation(
     dto: QuoteReservationDto,
@@ -133,10 +138,10 @@ export class ReservationService {
       lastNight === undefined
         ? []
         : await this.availabilityService.findByRoomAndIsoRange(
-          dto.room_id,
-          dto.checkin,
-          lastNight,
-        );
+            dto.room_id,
+            dto.checkin,
+            lastNight,
+          );
 
     const availabilityByDate = new Map(
       availabilityRows.map(row => [this.formatIsoDate(row.date), row]),
@@ -222,8 +227,8 @@ export class ReservationService {
 
     let boardOption = null as
       | Awaited<
-        ReturnType<RoomBoardOptionsService["findActiveBoardOptionsByRoom"]>
-      >[number]
+          ReturnType<RoomBoardOptionsService["findActiveBoardOptionsByRoom"]>
+        >[number]
       | null;
 
     if (boardOptions.length === 0) {
@@ -239,11 +244,7 @@ export class ReservationService {
           const response = error.getResponse();
           if (typeof response === "string") {
             errors.push(response);
-          } else if (
-            typeof response === "object" &&
-            response !== null &&
-            "message" in response
-          ) {
+          } else if (typeof response === "object" && "message" in response) {
             const message = (response as { message?: string | string[] })
               .message;
             if (Array.isArray(message)) {
@@ -262,12 +263,13 @@ export class ReservationService {
       boardOption === null
         ? 0
         : this.roomBoardOptionsService.calculateBoardAmountForOption(
-          boardOption,
-          nights,
-        );
+            boardOption,
+            nights,
+          );
 
-    const activeExtras =
-      await this.roomExtrasService.findActiveExtrasByRoom(dto.room_id);
+    const activeExtras = await this.roomExtrasService.findActiveExtrasByRoom(
+      dto.room_id,
+    );
 
     const subtotal = baseSubtotal + boardAmount;
     const commission = 0;
@@ -434,10 +436,10 @@ export class ReservationService {
       lastNight === undefined
         ? []
         : await this.availabilityService.findByRoomAndIsoRange(
-          dto.room_id,
-          dto.checkin,
-          lastNight,
-        );
+            dto.room_id,
+            dto.checkin,
+            lastNight,
+          );
 
     const expirationDate = new Date(
       Date.now() + envs.PENDING_RESERVATION_EXPIRATION_TIME,
@@ -451,13 +453,13 @@ export class ReservationService {
         quote.board_option === null
           ? undefined
           : {
-            code: quote.board_option.code,
-            name: quote.board_option.name,
-            description: quote.board_option.description,
-            is_included: quote.board_option.is_included,
-            price: quote.board_option.price,
-            board_amount: quote.board_amount,
-          },
+              code: quote.board_option.code,
+              name: quote.board_option.name,
+              description: quote.board_option.description,
+              is_included: quote.board_option.is_included,
+              price: quote.board_option.price,
+              board_amount: quote.board_amount,
+            },
       extras_snapshot: [],
       source: "internal",
       user_id: dto.user_id ?? 0,
@@ -499,7 +501,6 @@ export class ReservationService {
     from_iso: string,
     to_iso: string,
   ): Promise<ReservationWithRoomName[]> {
-    console.log("find_active_by_site_and_range", site_id, from_iso, to_iso);
     const rows = await this.reservationRepository
       .createQueryBuilder("r")
       .where("r.site_id = :site_id", { site_id })
@@ -522,8 +523,6 @@ export class ReservationService {
       }
     }
 
-    console.log("rows", rows);
-
     return rows.map(row => {
       const subtotal = row.subtotal;
       const checkinMs = new Date(row.checkin).getTime();
@@ -531,9 +530,9 @@ export class ReservationService {
       const nights =
         Number.isFinite(checkinMs) && Number.isFinite(checkoutMs)
           ? Math.max(
-            0,
-            Math.round((checkoutMs - checkinMs) / (24 * 60 * 60 * 1000)),
-          )
+              0,
+              Math.round((checkoutMs - checkinMs) / (24 * 60 * 60 * 1000)),
+            )
           : 0;
       const boardAmount = row.board_snapshot?.board_amount ?? 0;
       const base_subtotal = subtotal ? Math.max(0, subtotal - boardAmount) : 0;
@@ -560,7 +559,11 @@ export class ReservationService {
       where: {
         site_id,
         room_id,
-        status: In(["pending", "confirmed", "finalized"] satisfies StatusValue[]),
+        status: In([
+          "pending",
+          "confirmed",
+          "finalized",
+        ] satisfies StatusValue[]),
         checkin: LessThan(checkout),
         checkout: MoreThan(checkin),
       },
@@ -578,7 +581,9 @@ export class ReservationService {
     return this.reservationRepository.save(reservation);
   }
 
-  async activateFromPayment(input: ActivateFromPaymentInput) {
+  async activateFromPayment(
+    input: ActivateFromPaymentInput,
+  ): Promise<ActivateFromPaymentResult> {
     const reservation = await this.reservationRepository.findOne({
       where: { id: input.reservationId },
     });
@@ -592,14 +597,14 @@ export class ReservationService {
       reservation.status === "confirmed" &&
       reservation.payment_status === "paid"
     ) {
-      return reservation;
+      return { reservation, activated: false };
     }
 
     if (reservation.status === "cancelled") {
       this.logger.warn(
         `Payment received for cancelled reservation ${reservation.id} (session ${input.checkoutSessionId}). Manual review required.`,
       );
-      return reservation;
+      return { reservation, activated: false };
     }
 
     if (
@@ -609,7 +614,7 @@ export class ReservationService {
       this.logger.warn(
         `Payment received for reservation ${reservation.id} in unexpected state: status=${reservation.status}, payment_status=${reservation.payment_status}`,
       );
-      return reservation;
+      return { reservation, activated: false };
     }
     const expectedAmountCents = Math.round(
       (Number(reservation.subtotal) + Number(reservation.commission)) * 100,
@@ -641,7 +646,8 @@ export class ReservationService {
       );
     }
 
-    return this.reservationRepository.save(updated);
+    const saved = await this.reservationRepository.save(updated);
+    return { reservation: saved, activated: true };
   }
 
   async cancel(id: number) {

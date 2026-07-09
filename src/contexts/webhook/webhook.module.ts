@@ -21,10 +21,7 @@ import { WebhookService } from "./services/webhook.service";
   imports: [
     ReservationModule,
     StripeModule,
-    TypeOrmModule.forFeature([
-      StripeWebhookEventEntity,
-      ReservationEntity,
-    ]),
+    TypeOrmModule.forFeature([StripeWebhookEventEntity, ReservationEntity]),
   ],
 })
 export class WebhookModule {}

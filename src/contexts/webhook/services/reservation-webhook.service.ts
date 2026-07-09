@@ -5,8 +5,8 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 
 import { ReservationEntity } from "../../reservations/entities/reservation.entity";
-import { ReservationEmailService } from "../../reservations/services/reservation-email.service";
 import { ReservationService } from "../../reservations/services/reservation.service";
+import { ReservationEmailService } from "../../reservations/services/reservation-email.service";
 
 interface CheckoutSessionPayload {
   id: string;
@@ -33,7 +33,6 @@ export class ReservationWebhookService {
     }
 
     const session = event.data.object as CheckoutSessionPayload;
-
     if (session.payment_status !== "paid") {
       this.logger.log(
         `Checkout session ${session.id} completed with payment_status=${session.payment_status}`,
@@ -65,17 +64,23 @@ export class ReservationWebhookService {
     }
 
     try {
-      const reservation = await this.reservationService.activateFromPayment({
-        reservationId,
-        checkoutSessionId: session.id,
-        paymentIntentId,
-        amountPaidCents: session.amount_total,
-      });
+      const { reservation, activated } =
+        await this.reservationService.activateFromPayment({
+          reservationId,
+          checkoutSessionId: session.id,
+          paymentIntentId,
+          amountPaidCents: session.amount_total,
+        });
+      if (!activated) {
+        this.logger.log(
+          `Reservation ${reservationId} already activated; skipping confirmation emails`,
+        );
+        return;
+      }
 
       const site = await this.reservationService.getSiteById(
         reservation.site_id,
       );
-
       await this.reservationEmailService.sendPaymentConfirmedEmails(
         reservation,
         site,

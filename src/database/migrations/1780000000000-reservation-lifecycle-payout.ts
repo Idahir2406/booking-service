@@ -1,8 +1,6 @@
 import { MigrationInterface, QueryRunner } from "typeorm";
 
-export class ReservationLifecyclePayout1780000000000
-  implements MigrationInterface
-{
+export class ReservationLifecyclePayout1780000000000 implements MigrationInterface {
   name = "ReservationLifecyclePayout1780000000000";
 
   public async up(queryRunner: QueryRunner): Promise<void> {
@@ -96,9 +94,7 @@ export class ReservationLifecyclePayout1780000000000
     await queryRunner.query(
       `DROP TYPE "public"."reservation_disputes_status_enum"`,
     );
-    await queryRunner.query(
-      `DROP INDEX "public"."idx_feedback_tokens_hash"`,
-    );
+    await queryRunner.query(`DROP INDEX "public"."idx_feedback_tokens_hash"`);
     await queryRunner.query(
       `DROP INDEX "public"."idx_feedback_tokens_reservation"`,
     );

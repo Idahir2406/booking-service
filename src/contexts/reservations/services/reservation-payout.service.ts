@@ -11,10 +11,10 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { IsNull, LessThanOrEqual, Repository } from "typeorm";
 
 import { StripeService } from "../../stripe/services/stripe.service";
-import { ReservationGuestFeedbackEntity } from "../entities/reservation-guest-feedback.entity";
 import { ReservationEntity } from "../entities/reservation.entity";
-import { ReservationEmailService } from "./reservation-email.service";
+import { ReservationGuestFeedbackEntity } from "../entities/reservation-guest-feedback.entity";
 import { ReservationService } from "./reservation.service";
+import { ReservationEmailService } from "./reservation-email.service";
 
 export interface ReleasePayoutResult {
   released: boolean;
@@ -38,9 +38,7 @@ export class ReservationPayoutService {
     )
     private readonly stripeService: StripeService,
     @Inject(
-      forwardRef(
-        () => require("./reservation.service").ReservationService,
-      ),
+      forwardRef(() => require("./reservation.service").ReservationService),
     )
     private readonly reservationService: ReservationService,
     private readonly reservationEmailService: ReservationEmailService,

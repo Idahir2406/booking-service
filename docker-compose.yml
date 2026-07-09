@@ -21,10 +21,15 @@ services:
     container_name: my-service-dev
     restart: unless-stopped
     env_file: .env
+    depends_on:
+      - redis
+      - db
     environment:
       # Dentro del contenedor, localhost es el propio contenedor.
       # host.docker.internal apunta al Mac donde corre XAMPP/MySQL.
       DB_HOST: host.docker.internal
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     extra_hosts:
       - "host.docker.internal:host-gateway"
     build:
@@ -58,6 +63,12 @@ services:
       POSTGRES_PASSWORD: contraseña
       POSTGRES_DB: booking
 
+  redis:
+    image: redis:7.4.1-alpine
+    volumes:
+      - ./redis_data:/data
+    restart: unless-stopped
+
 volumes:
   postgres_data:
-
+  redis_data:

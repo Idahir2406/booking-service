@@ -1,5 +1,5 @@
-import type { ReservationWithRoomName } from "../dto/reservation-with-room.dto";
 import type { FeedbackSummaryDto } from "../dto/feedback-summary.dto";
+import type { ReservationWithRoomName } from "../dto/reservation-with-room.dto";
 
 import {
   Body,
@@ -21,9 +21,9 @@ import { FinalizeReservationDto } from "../dto/finalize-reservation.dto";
 import { QuoteReservationDto } from "../dto/quote-reservation.dto";
 import { ReservationPublicSummaryDto } from "../dto/reservation-public-summary.dto";
 import { SubmitFeedbackDto } from "../dto/submit-feedback.dto";
+import { ReservationService } from "../services/reservation.service";
 import { ReservationFeedbackService } from "../services/reservation-feedback.service";
 import { ReservationLifecycleService } from "../services/reservation-lifecycle.service";
-import { ReservationService } from "../services/reservation.service";
 
 @Controller({
   path: "reservations",
@@ -51,7 +51,9 @@ export class ReservationController {
   }
 
   @Get("feedback/:token")
-  getFeedbackSummary(@Param("token") token: string): Promise<FeedbackSummaryDto> {
+  getFeedbackSummary(
+    @Param("token") token: string,
+  ): Promise<FeedbackSummaryDto> {
     return this.feedbackService.getFeedbackSummary(token);
   }
 

@@ -1,3 +1,5 @@
+import { createHash, randomBytes } from "node:crypto";
+
 import {
   BadRequestException,
   GoneException,
@@ -5,25 +7,24 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { createHash, randomBytes } from "node:crypto";
 import { Repository } from "typeorm";
+
+import { Site } from "@/src/types/site.types";
 
 import { envs } from "../../shared/configs/envs";
 import { MysqlService } from "../../shared/services/mysql.service";
-import { Site } from "@/src/types/site.types";
-
 import { FeedbackSummaryDto } from "../dto/feedback-summary.dto";
 import { SubmitFeedbackDto } from "../dto/submit-feedback.dto";
+import {
+  PayoutStatusValue,
+  ReservationEntity,
+} from "../entities/reservation.entity";
 import { ReservationDisputeEntity } from "../entities/reservation-dispute.entity";
 import { ReservationFeedbackTokenEntity } from "../entities/reservation-feedback-token.entity";
 import {
   FeedbackTypeValue,
   ReservationGuestFeedbackEntity,
 } from "../entities/reservation-guest-feedback.entity";
-import {
-  PayoutStatusValue,
-  ReservationEntity,
-} from "../entities/reservation.entity";
 import { ReservationEmailService } from "./reservation-email.service";
 import { ReservationEventService } from "./reservation-event.service";
 import { ReservationPayoutService } from "./reservation-payout.service";
@@ -49,7 +50,10 @@ export class ReservationFeedbackService {
     return createHash("sha256").update(token).digest("hex");
   }
 
-  async createFeedbackToken(reservationId: number, expiresAt: Date): Promise<string> {
+  async createFeedbackToken(
+    reservationId: number,
+    expiresAt: Date,
+  ): Promise<string> {
     const rawToken = randomBytes(32).toString("hex");
     const tokenHash = this.hashToken(rawToken);
 
@@ -153,15 +157,16 @@ export class ReservationFeedbackService {
       if (!dto.rating || dto.rating < 1 || dto.rating > 5) {
         throw new BadRequestException("Rating is required for reviews (1-5)");
       }
-    } else if (dto.type === "report") {
-      if (!dto.report_reason || dto.report_reason.trim() === "") {
-        throw new BadRequestException("Report reason is required");
-      }
+    } else if (
+      dto.type === "report" &&
+      (!dto.report_reason || dto.report_reason.trim() === "")
+    ) {
+      throw new BadRequestException("Report reason is required");
     }
 
     const feedback = this.feedbackRepository.create({
       reservation_id: reservation.id,
-      type: dto.type as FeedbackTypeValue,
+      type: dto.type,
       rating: dto.rating,
       comment: dto.comment,
       report_reason: dto.report_reason,
@@ -190,9 +195,13 @@ export class ReservationFeedbackService {
           feedback,
         );
       }
-      await this.reservationEventService.logEvent(reservation.id, "feedback_review", {
-        rating: dto.rating,
-      });
+      await this.reservationEventService.logEvent(
+        reservation.id,
+        "feedback_review",
+        {
+          rating: dto.rating,
+        },
+      );
     } else {
       const updated = await this.reservationRepository.preload({
         id: reservation.id,
@@ -218,9 +227,13 @@ export class ReservationFeedbackService {
           feedback,
         );
       }
-      await this.reservationEventService.logEvent(reservation.id, "feedback_report", {
-        report_reason: dto.report_reason,
-      });
+      await this.reservationEventService.logEvent(
+        reservation.id,
+        "feedback_report",
+        {
+          report_reason: dto.report_reason,
+        },
+      );
     }
 
     return { already_submitted: false, feedback };

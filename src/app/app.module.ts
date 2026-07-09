@@ -1,3 +1,4 @@
+import { BullModule } from "@nestjs/bullmq";
 import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { ScheduleModule } from "@nestjs/schedule";
@@ -9,6 +10,7 @@ import { LoggerModule } from "@/shared/logger/logger.module";
 
 import { AvailabilityModule } from "@/contexts/availability/availability.module";
 import { BlocksModule } from "@/contexts/blocks/blocks.module";
+import { MailModule } from "@/contexts/mail/mail.module";
 import { ReservationModule } from "@/contexts/reservations/reservation.module";
 import { RoomsModule } from "@/contexts/rooms/rooms.module";
 import { envs } from "@/contexts/shared/configs/envs";
@@ -26,6 +28,13 @@ import { WebhookModule } from "../contexts/webhook/webhook.module";
       autoLoadEntities: true,
       synchronize: false,
     }),
+    BullModule.forRoot({
+      connection: {
+        host: envs.REDIS_HOST,
+        port: envs.REDIS_PORT,
+      },
+    }),
+    MailModule,
     LoggerModule,
     HealthModule,
     StripeModule,

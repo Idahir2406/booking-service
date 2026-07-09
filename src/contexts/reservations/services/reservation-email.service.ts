@@ -1,52 +1,35 @@
+import type {
+  BuiltReservationEmail,
+  ReservationEmailPayload,
+  ReservationEmailType,
+} from "../types/reservation-email.types";
+
 import { Injectable, Logger } from "@nestjs/common";
 
 import { Site } from "@/src/types/site.types";
 
+import { MailQueueService } from "../../mail/mail-queue.service";
 import { envs } from "../../shared/configs/envs";
-import { ReservationGuestFeedbackEntity } from "../entities/reservation-guest-feedback.entity";
 import { ReservationEntity } from "../entities/reservation.entity";
+import { ReservationGuestFeedbackEntity } from "../entities/reservation-guest-feedback.entity";
+import { ReservationEmailTemplateService } from "./reservation-email-template.service";
 
-export type ReservationEmailType =
-  | "payment_confirmed_guest"
-  | "payment_confirmed_host"
-  | "cancelled_guest_refund"
-  | "cancelled_guest_no_refund"
-  | "cancelled_host"
-  | "finalized_guest_feedback"
-  | "finalized_host"
-  | "feedback_review_guest"
-  | "feedback_review_host"
-  | "feedback_report_guest"
-  | "feedback_report_host"
-  | "feedback_report_admin"
-  | "payout_released_host"
-  | "payout_released_guest"
-  | "payout_failed_host"
-  | "payout_failed_admin"
-  | "refund_processed_guest"
-  | "refund_processed_host";
+export type { ReservationEmailType } from "../types/reservation-email.types";
 
 @Injectable()
 export class ReservationEmailService {
   private readonly logger = new Logger(ReservationEmailService.name);
 
-  private getDispatcherUrl(): string | null {
-    if (!envs.BOOKING_EMAIL_TOKEN) {
-      this.logger.warn("BOOKING_EMAIL_TOKEN not set; skipping reservation email");
-      return null;
-    }
-    const webBase = (envs.BOOKING_WEB_URL ?? envs.FRONTEND_URL).replace(
-      /\/+$/,
-      "",
-    );
-    return `${webBase}/php/booking_reservation_email.php`;
-  }
+  constructor(
+    private readonly mailQueueService: MailQueueService,
+    private readonly templateService: ReservationEmailTemplateService,
+  ) {}
 
   private reservationPayload(
     reservation: ReservationEntity,
     site: Site,
     extras: Record<string, unknown> = {},
-  ) {
+  ): ReservationEmailPayload {
     return {
       reservation_id: reservation.id,
       guest_name: reservation.guest_name ?? "",
@@ -64,38 +47,55 @@ export class ReservationEmailService {
     };
   }
 
+  private resolveRecipient(built: BuiltReservationEmail): {
+    to: string;
+    subject: string;
+    html: string;
+  } {
+    const intendedEmail = built.to;
+    if (envs.NODE_ENV === "production") {
+      return {
+        to: intendedEmail,
+        subject: built.subject,
+        html: built.html,
+      };
+    }
+
+    const devBanner = `<p><em>Destinatario real: ${this.escapeHtml(intendedEmail)}</em></p>`;
+    return {
+      to: envs.BOOKING_DEV_EMAIL,
+      subject: `[DEV ${built.roleLabel} → ${intendedEmail}] ${built.subject}`,
+      html: devBanner + built.html,
+    };
+  }
+
   async sendReservationEmail(
     emailType: ReservationEmailType,
     reservation: ReservationEntity,
     site: Site,
     extras: Record<string, unknown> = {},
   ): Promise<void> {
-    const url = this.getDispatcherUrl();
-    if (!url) {
-      return;
-    }
-
-    const payload = {
-      email_type: emailType,
-      ...this.reservationPayload(reservation, site, extras),
-    };
+    const payload = this.reservationPayload(reservation, site, extras);
+    const customer = site.customer ?? "";
 
     try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${envs.BOOKING_EMAIL_TOKEN}`,
-        },
-        body: JSON.stringify(payload),
-      });
+      const built = await this.templateService.build(
+        emailType,
+        payload,
+        customer,
+      );
 
-      if (!response.ok) {
-        const text = await response.text();
-        this.logger.warn(
-          `Email ${emailType} HTTP ${response.status}: ${text.slice(0, 200)}`,
-        );
+      if (!built) {
+        return;
       }
+
+      const resolved = this.resolveRecipient(built);
+
+      await this.mailQueueService.enqueue({
+        to: resolved.to,
+        subject: resolved.subject,
+        html: resolved.html,
+      });
     } catch (error) {
       this.logger.error(
         `Failed to send email ${emailType}`,
@@ -163,7 +163,8 @@ export class ReservationEmailService {
       { feedback_url: feedbackUrl },
     );
     await this.sendReservationEmail("finalized_host", reservation, site, {
-      feedback_deadline_at: reservation.feedback_deadline_at?.toISOString() ?? "",
+      feedback_deadline_at:
+        reservation.feedback_deadline_at?.toISOString() ?? "",
     });
   }
 
@@ -172,10 +173,15 @@ export class ReservationEmailService {
     site: Site,
     feedback: ReservationGuestFeedbackEntity,
   ): Promise<void> {
-    await this.sendReservationEmail("feedback_review_guest", reservation, site, {
-      rating: feedback.rating,
-      comment: feedback.comment ?? "",
-    });
+    await this.sendReservationEmail(
+      "feedback_review_guest",
+      reservation,
+      site,
+      {
+        rating: feedback.rating,
+        comment: feedback.comment ?? "",
+      },
+    );
     await this.sendReservationEmail("feedback_review_host", reservation, site, {
       rating: feedback.rating,
       comment: feedback.comment ?? "",
@@ -187,17 +193,27 @@ export class ReservationEmailService {
     site: Site,
     feedback: ReservationGuestFeedbackEntity,
   ): Promise<void> {
-    await this.sendReservationEmail("feedback_report_guest", reservation, site, {
-      report_reason: feedback.report_reason ?? "",
-    });
+    await this.sendReservationEmail(
+      "feedback_report_guest",
+      reservation,
+      site,
+      {
+        report_reason: feedback.report_reason ?? "",
+      },
+    );
     await this.sendReservationEmail("feedback_report_host", reservation, site, {
       report_reason: feedback.report_reason ?? "",
     });
-    await this.sendReservationEmail("feedback_report_admin", reservation, site, {
-      report_reason: feedback.report_reason ?? "",
-      comment: feedback.comment ?? "",
-      admin_email: envs.BOOKING_ADMIN_EMAIL,
-    });
+    await this.sendReservationEmail(
+      "feedback_report_admin",
+      reservation,
+      site,
+      {
+        report_reason: feedback.report_reason ?? "",
+        comment: feedback.comment ?? "",
+        admin_email: envs.BOOKING_ADMIN_EMAIL,
+      },
+    );
   }
 
   async sendPayoutReleasedEmails(
@@ -226,7 +242,11 @@ export class ReservationEmailService {
     reservation: ReservationEntity,
     site: Site,
   ): Promise<void> {
-    await this.sendReservationEmail("refund_processed_guest", reservation, site);
+    await this.sendReservationEmail(
+      "refund_processed_guest",
+      reservation,
+      site,
+    );
     await this.sendReservationEmail("refund_processed_host", reservation, site);
   }
 
@@ -235,14 +255,27 @@ export class ReservationEmailService {
     site: Site,
     reason: string,
   ): Promise<void> {
-    await this.sendReservationEmail("feedback_report_admin", reservation, site, {
-      report_reason: reason,
-      comment: "Stripe chargeback/dispute created",
-      admin_email: envs.BOOKING_ADMIN_EMAIL,
-    });
+    await this.sendReservationEmail(
+      "feedback_report_admin",
+      reservation,
+      site,
+      {
+        report_reason: reason,
+        comment: "Stripe chargeback/dispute created",
+        admin_email: envs.BOOKING_ADMIN_EMAIL,
+      },
+    );
     await this.sendReservationEmail("feedback_report_host", reservation, site, {
       report_reason: reason,
       comment: "Stripe chargeback/dispute created",
     });
+  }
+
+  private escapeHtml(value: string): string {
+    return value
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;");
   }
 }

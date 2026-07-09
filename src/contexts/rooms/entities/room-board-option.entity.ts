@@ -1,3 +1,5 @@
+import type { RoomEntity } from "./room.entity";
+
 import {
   Column,
   Entity,
@@ -6,8 +8,6 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from "typeorm";
-
-import type { RoomEntity } from "./room.entity";
 
 export const board_type_values = [
   "room_only",

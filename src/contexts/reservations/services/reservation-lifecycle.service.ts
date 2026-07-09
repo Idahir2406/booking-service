@@ -15,11 +15,11 @@ import {
   ReservationEntity,
   StatusValue,
 } from "../entities/reservation.entity";
+import { ReservationService } from "./reservation.service";
 import { ReservationEmailService } from "./reservation-email.service";
 import { ReservationEventService } from "./reservation-event.service";
 import { ReservationFeedbackService } from "./reservation-feedback.service";
 import { ReservationPayoutService } from "./reservation-payout.service";
-import { ReservationService } from "./reservation.service";
 
 @Injectable()
 export class ReservationLifecycleService {
@@ -180,9 +180,7 @@ export class ReservationLifecycleService {
 
     const checkoutIso = reservation.checkout.slice(0, 10);
     if (checkoutIso > this.todayIso()) {
-      throw new BadRequestException(
-        "Cannot finalize before checkout date",
-      );
+      throw new BadRequestException("Cannot finalize before checkout date");
     }
 
     const now = new Date();
@@ -195,8 +193,7 @@ export class ReservationLifecycleService {
       status: "finalized" as StatusValue,
       finalized_at: now,
       feedback_deadline_at: deadline,
-      payout_status:
-        reservation.payout_status ?? ("held" as PayoutStatusValue),
+      payout_status: reservation.payout_status ?? ("held" as PayoutStatusValue),
     });
     if (!updated) {
       throw new NotFoundException(`Reservation with id ${id} not found`);

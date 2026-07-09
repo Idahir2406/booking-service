@@ -28,6 +28,21 @@ const envSchema = z.object({
   FEEDBACK_PAYOUT_DELAY_HOURS: z.coerce.number().default(24),
   BOOKING_DEV_EMAIL: z.string().email().default("idairreyes@gmail.com"),
   BOOKING_ADMIN_EMAIL: z.string().email().default("reservas@viajes4patas.com"),
+  BOOKING_EMAIL_LANG: z.string().default("es"),
+  SMTP_HOST: z.string(),
+  SMTP_PORT: z.coerce.number().default(465),
+  SMTP_SECURE: z
+    .string()
+    .default("true")
+    .transform(v => v === "true" || v === "1"),
+  SMTP_USER: z.string(),
+  SMTP_PASS: z.string(),
+  SMTP_FROM: z.email(),
+  SMTP_FROM_NAME: z.string(),
+  SMTP_REPLY_TO: z.email(),
+  REDIS_HOST: z.string().default("localhost"),
+  REDIS_PORT: z.coerce.number().default(6379),
+  MAIL_QUEUE_NAME: z.string().default("mail-send"),
 });
 
 export const envs = envSchema.parse(process.env);

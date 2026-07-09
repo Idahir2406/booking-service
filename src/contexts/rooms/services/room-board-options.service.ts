@@ -60,9 +60,7 @@ export class RoomBoardOptionsService {
     const activeBoard = boardOptions.filter(opt => opt.is_active !== false);
 
     if (activeBoard.length === 0) {
-      throw new BadRequestException(
-        "Debe haber al menos una pensión activa.",
-      );
+      throw new BadRequestException("Debe haber al menos una pensión activa.");
     }
 
     const defaultCount = activeBoard.filter(
