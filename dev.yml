@@ -1,21 +1,29 @@
 services:
-  my-service-production:
-    container_name: my-service-production
+  my-service-dev:
+    container_name: my-service-dev
     restart: unless-stopped
     env_file: .env
     depends_on:
       - redis
       - db
     environment:
+      # Dentro del contenedor, localhost es el propio contenedor.
+      # host.docker.internal apunta al Mac donde corre XAMPP/MySQL.
+      DB_HOST: host.docker.internal
       REDIS_HOST: redis
       REDIS_PORT: 6379
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     build:
-      target: production
+      target: dev
       context: .
       args:
         - PORT=${PORT:-3000}
     ports:
-      - "${PRODUCTION_PORT:-3001}:${PORT:-3000}"
+      - "${PORT:-3000}:${PORT:-3000}"
+      - "9229:9229"
+    volumes:
+      - ./src:/app/src
     deploy:
       resources:
         limits:
