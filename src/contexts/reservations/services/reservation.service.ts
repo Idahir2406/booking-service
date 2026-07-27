@@ -33,6 +33,11 @@ import {
   ReservationEntity,
   StatusValue,
 } from "../entities/reservation.entity";
+import {
+  computeReservationPolicyCapabilities,
+  formatUtcIsoDate,
+  parseIsoDateAtUtcMidnight,
+} from "../utils/reservation-policy.util";
 
 export interface ActivateFromPaymentInput {
   reservationId: number;
@@ -537,6 +542,8 @@ export class ReservationService {
       const boardAmount = row.board_snapshot?.board_amount ?? 0;
       const base_subtotal = subtotal ? Math.max(0, subtotal - boardAmount) : 0;
 
+      const policy = computeReservationPolicyCapabilities(row);
+
       return {
         ...row,
         subtotal,
@@ -545,6 +552,10 @@ export class ReservationService {
         room_name: roomNames.get(row.room_id) ?? null,
         nights,
         base_subtotal,
+        can_cancel: policy.can_cancel,
+        can_refund: policy.can_refund,
+        can_finalize: policy.can_finalize,
+        refund_deadline: policy.refund_deadline,
       };
     });
   }
@@ -665,6 +676,45 @@ export class ReservationService {
 
   async releaseAvailabilityForReservation(reservation: ReservationEntity) {
     await this.releaseAvailability(reservation);
+  }
+
+  async releaseRemainingAvailabilityForReservation(
+    reservation: ReservationEntity,
+  ) {
+    const todayIso = formatUtcIsoDate(new Date());
+    const checkinIso = reservation.checkin.slice(0, 10);
+    const checkoutIso = reservation.checkout.slice(0, 10);
+    const releaseFromMs = Math.max(
+      parseIsoDateAtUtcMidnight(checkinIso).getTime(),
+      parseIsoDateAtUtcMidnight(todayIso).getTime(),
+    );
+    const releaseFromIso = formatUtcIsoDate(new Date(releaseFromMs));
+
+    if (releaseFromIso >= checkoutIso) {
+      return;
+    }
+
+    const nightDates = this.getNightDates(releaseFromIso, reservation.checkout);
+    const lastNight = nightDates.at(-1);
+    if (lastNight === undefined) {
+      return;
+    }
+
+    const availability = await this.availabilityService.findByRoomAndIsoRange(
+      reservation.room_id,
+      releaseFromIso,
+      lastNight,
+    );
+
+    if (availability.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      availability.map(date =>
+        this.availabilityService.update(date.id, { is_available: true }),
+      ),
+    );
   }
 
   private async releaseAvailability(reservation: ReservationEntity) {

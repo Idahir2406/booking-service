@@ -1,6 +1,7 @@
 import type { ReservationBoardSnapshot } from "../entities/reservation.entity";
+import type { ReservationPolicyCapabilities } from "../utils/reservation-policy.util";
 
-export interface ReservationWithRoomName {
+export interface ReservationWithRoomName extends ReservationPolicyCapabilities {
   id: number;
   site_id: number;
   room_id: string;

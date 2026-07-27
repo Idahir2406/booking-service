@@ -1,9 +1,4 @@
-import {
-  Body,
-  Controller,
-  ForbiddenException,
-  Post,
-} from "@nestjs/common";
+import { Body, Controller, ForbiddenException, Post } from "@nestjs/common";
 
 import { envs } from "../shared/configs/envs";
 import { SendTestMailDto } from "./dto/send-test-mail.dto";
@@ -22,7 +17,8 @@ export class MailController {
       throw new ForbiddenException(
         "Mail test endpoint is disabled in production",
       );
-    } console.log("envs", envs);
+    }
+    console.log("envs", envs);
 
     const to = dto.to ?? envs.BOOKING_DEV_EMAIL;
     const subject = dto.subject ?? "Test email booking API";

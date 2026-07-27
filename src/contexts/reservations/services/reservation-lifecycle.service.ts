@@ -15,6 +15,11 @@ import {
   ReservationEntity,
   StatusValue,
 } from "../entities/reservation.entity";
+import {
+  computeReservationPolicyCapabilities,
+  getCheckinStartUtc,
+  getCheckoutStartUtc,
+} from "../utils/reservation-policy.util";
 import { ReservationService } from "./reservation.service";
 import { ReservationEmailService } from "./reservation-email.service";
 import { ReservationEventService } from "./reservation-event.service";
@@ -33,21 +38,13 @@ export class ReservationLifecycleService {
     private readonly reservationEventService: ReservationEventService,
   ) {}
 
-  private async assertHostAccess(
+  private assertHostAccess(
     reservation: ReservationEntity,
     siteId?: number,
-  ): Promise<void> {
+  ): void {
     if (!siteId || siteId !== reservation.site_id) {
       throw new ForbiddenException("Site access denied");
     }
-  }
-
-  private todayIso(): string {
-    const now = new Date();
-    const year = now.getFullYear();
-    const month = `${now.getMonth() + 1}`.padStart(2, "0");
-    const day = `${now.getDate()}`.padStart(2, "0");
-    return `${year}-${month}-${day}`;
   }
 
   async cancelReservation(id: number, dto: CancelReservationDto) {
@@ -58,7 +55,7 @@ export class ReservationLifecycleService {
       throw new NotFoundException(`Reservation with id ${id} not found`);
     }
 
-    await this.assertHostAccess(reservation, dto.site_id);
+    this.assertHostAccess(reservation, dto.site_id);
 
     if (reservation.payout_status === "blocked") {
       throw new BadRequestException(
@@ -77,6 +74,7 @@ export class ReservationLifecycleService {
     }
 
     const now = new Date();
+    const policy = computeReservationPolicyCapabilities(reservation, now);
     let refundProcessed = false;
 
     if (reservation.status === "pending") {
@@ -105,11 +103,25 @@ export class ReservationLifecycleService {
       return saved;
     }
 
-    if (
-      reservation.status === "confirmed" ||
-      reservation.status === "finalized"
-    ) {
+    if (reservation.status === "confirmed") {
+      if (!policy.can_cancel) {
+        const checkoutStart = getCheckoutStartUtc(reservation.checkout);
+        if (now.getTime() >= checkoutStart.getTime()) {
+          throw new BadRequestException(
+            "Cannot cancel after checkout; please finalize the stay",
+          );
+        }
+        throw new BadRequestException(
+          `Cannot cancel reservation in status ${reservation.status}`,
+        );
+      }
+
       if (dto.refund) {
+        if (!policy.can_refund) {
+          throw new BadRequestException(
+            "Refund is not allowed: less than 24 hours before check-in or payout already released",
+          );
+        }
         if (reservation.payment_status !== "paid") {
           throw new BadRequestException(
             "Cannot refund: reservation is not paid",
@@ -163,7 +175,7 @@ export class ReservationLifecycleService {
       throw new NotFoundException(`Reservation with id ${id} not found`);
     }
 
-    await this.assertHostAccess(reservation, siteId);
+    this.assertHostAccess(reservation, siteId);
 
     if (reservation.status === "finalized") {
       return reservation;
@@ -178,12 +190,18 @@ export class ReservationLifecycleService {
       );
     }
 
-    const checkoutIso = reservation.checkout.slice(0, 10);
-    if (checkoutIso > this.todayIso()) {
-      throw new BadRequestException("Cannot finalize before checkout date");
+    const now = new Date();
+    const policy = computeReservationPolicyCapabilities(reservation, now);
+    if (!policy.can_finalize) {
+      const checkinStart = getCheckinStartUtc(reservation.checkin);
+      if (now.getTime() < checkinStart.getTime()) {
+        throw new BadRequestException("Cannot finalize before check-in date");
+      }
+      throw new BadRequestException(
+        "Cannot finalize reservation in its current state",
+      );
     }
 
-    const now = new Date();
     const deadline = new Date(
       now.getTime() + envs.FEEDBACK_PAYOUT_DELAY_HOURS * 60 * 60 * 1000,
     );
@@ -199,6 +217,10 @@ export class ReservationLifecycleService {
       throw new NotFoundException(`Reservation with id ${id} not found`);
     }
     const saved = await this.reservationRepository.save(updated);
+
+    await this.reservationService.releaseRemainingAvailabilityForReservation(
+      saved,
+    );
 
     const feedbackToken = await this.feedbackService.createFeedbackToken(
       saved.id,
