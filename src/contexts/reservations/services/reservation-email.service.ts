@@ -76,14 +76,9 @@ export class ReservationEmailService {
     extras: Record<string, unknown> = {},
   ): Promise<void> {
     const payload = this.reservationPayload(reservation, site, extras);
-    const customer = site.customer ?? "";
 
     try {
-      const built = await this.templateService.build(
-        emailType,
-        payload,
-        customer,
-      );
+      const built = this.templateService.build(emailType, payload);
 
       if (!built) {
         return;
