@@ -13,12 +13,11 @@ export class MailController {
 
   @Post("test")
   async sendTest(@Body() dto: SendTestMailDto) {
-    // if (envs.NODE_ENV === "production") {
-    //   throw new ForbiddenException(
-    //     "Mail test endpoint is disabled in production",
-    //   );
-    // }
-    console.log("envs", envs);
+    if (envs.NODE_ENV === "production") {
+      throw new ForbiddenException(
+        "Mail test endpoint is disabled in production",
+      );
+    }
 
     const to = dto.to ?? envs.BOOKING_DEV_EMAIL;
     const subject = dto.subject ?? "Test email booking API";
