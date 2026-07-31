@@ -21,11 +21,15 @@ export class WebhookService {
     const existing = await this.stripeWebhookEventRepository.findOne({
       where: { stripe_event_id: event.id },
     });
+    console.log("existing", existing);
     if (existing) {
       return { duplicate: true };
     }
 
-    switch (event.type) {
+    const type = event.type;
+    console.log("type", type);
+
+    switch (type) {
       case "checkout.session.completed": {
         await this.reservationWebhookService.handleCheckoutCompleted(event);
         break;
