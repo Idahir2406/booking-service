@@ -423,7 +423,11 @@ export class ReservationEmailTemplateService {
   }
 
   private text(key: string, fallback: string, vble: VbleMap): string {
-    const fromVble = vble[key].trim();
+    console.log("key", key);
+    console.log("vble", vble);
+    console.log("fallback", fallback);
+    const fromVble = (vble[key] ?? "").trim();
+    console.log("fromVble", fromVble);
     if (fromVble) {
       return fromVble;
     }
