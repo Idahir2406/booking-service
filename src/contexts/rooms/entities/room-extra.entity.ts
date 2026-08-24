@@ -19,11 +19,11 @@ export type ExtraPricingModeValue = (typeof extra_pricing_mode_values)[number];
 @Entity("room_extras")
 @Index("idx_room_extras_room_id", ["room_id"])
 export class RoomExtraEntity {
-  @PrimaryGeneratedColumn("uuid")
-  id!: string;
+  @PrimaryGeneratedColumn({ type: "int" })
+  id!: number;
 
-  @Column({ type: "uuid" })
-  room_id!: string;
+  @Column({ type: "int" })
+  room_id!: number;
 
   @ManyToOne("RoomEntity", { onDelete: "CASCADE" })
   @JoinColumn({ name: "room_id" })

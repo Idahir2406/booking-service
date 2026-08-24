@@ -21,11 +21,11 @@ export type BoardTypeValue = (typeof board_type_values)[number];
 @Entity("room_board_options")
 @Index("idx_room_board_options_room_id", ["room_id"])
 export class RoomBoardOptionEntity {
-  @PrimaryGeneratedColumn("uuid")
-  id!: string;
+  @PrimaryGeneratedColumn({ type: "int" })
+  id!: number;
 
-  @Column({ type: "uuid" })
-  room_id!: string;
+  @Column({ type: "int" })
+  room_id!: number;
 
   @ManyToOne("RoomEntity", { onDelete: "CASCADE" })
   @JoinColumn({ name: "room_id" })

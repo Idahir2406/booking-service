@@ -78,11 +78,11 @@ export class RoomsService {
       .map(row => this.sortRoomRelations(row));
   }
 
-  async findOne(id: string): Promise<RoomEntity> {
+  async findOne(id: number): Promise<RoomEntity> {
     return this.findOneWithRelations(id);
   }
 
-  async findOneForSite(id: string, siteId: number): Promise<RoomEntity> {
+  async findOneForSite(id: number, siteId: number): Promise<RoomEntity> {
     const row = await this.findOne(id);
     if (row.site_id !== siteId) {
       throw new NotFoundException(
@@ -92,7 +92,7 @@ export class RoomsService {
     return row;
   }
 
-  async update(id: string, updateDto: UpdateRoomDto): Promise<RoomEntity> {
+  async update(id: number, updateDto: UpdateRoomDto): Promise<RoomEntity> {
     const { board_options, extras, ...roomFields } = updateDto;
     const payload = omit_undefined(roomFields as Record<string, unknown>);
     for (const imageKey of [
@@ -137,7 +137,7 @@ export class RoomsService {
     });
   }
 
-  async remove(id: string): Promise<void> {
+  async remove(id: number): Promise<void> {
     const room = await this.findOne(id);
     const todayIso = new Date().toISOString().slice(0, 10);
 
@@ -167,7 +167,7 @@ export class RoomsService {
     await this.roomsRepository.remove(room);
   }
 
-  async getRoomNameMap(roomIds: string[]): Promise<Map<string, string>> {
+  async getRoomNameMap(roomIds: number[]): Promise<Map<number, string>> {
     if (roomIds.length === 0) {
       return new Map();
     }
@@ -178,7 +178,7 @@ export class RoomsService {
   }
 
   private async findOneWithRelations(
-    id: string,
+    id: number,
     manager: DataSource["manager"] = this.roomsRepository.manager,
   ): Promise<RoomEntity> {
     const row = await manager.findOne(RoomEntity, {
@@ -192,25 +192,25 @@ export class RoomsService {
   }
 
   private filterActiveRelations(room: RoomEntity): RoomEntity {
-    room.board_options = (room.board_options ?? []).filter(
+    room.board_options = (room.board_options).filter(
       option => option.is_active,
     );
-    room.extras = (room.extras ?? []).filter(extra => extra.is_active);
+    room.extras = (room.extras).filter(extra => extra.is_active);
     return room;
   }
 
   private sortRoomRelations(room: RoomEntity): RoomEntity {
-    room.board_options = [...(room.board_options ?? [])].sort((a, b) => {
+    room.board_options = [...(room.board_options)].sort((a, b) => {
       if (a.sort_order !== b.sort_order) {
         return a.sort_order - b.sort_order;
       }
-      return a.id.localeCompare(b.id);
+      return String(a.id).localeCompare(String(b.id));
     });
-    room.extras = [...(room.extras ?? [])].sort((a, b) => {
+    room.extras = [...(room.extras)].sort((a, b) => {
       if (a.sort_order !== b.sort_order) {
         return a.sort_order - b.sort_order;
       }
-      return a.id.localeCompare(b.id);
+      return String(a.id).localeCompare(String(b.id));
     });
     return room;
   }

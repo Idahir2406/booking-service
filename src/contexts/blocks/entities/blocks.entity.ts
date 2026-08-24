@@ -16,14 +16,14 @@ import {
   "end_date",
 ])
 export class BlocksEntity {
-  @PrimaryGeneratedColumn("uuid")
-  id!: string;
+  @PrimaryGeneratedColumn({ type: "int" })
+  id!: number;
 
   @Column({ type: "int" })
   site_id!: number;
 
-  @Column({ type: "uuid" })
-  room_id!: string;
+  @Column({ type: "int" })
+  room_id!: number;
 
   @Column({ type: "date" })
   start_date!: string;
@@ -34,8 +34,8 @@ export class BlocksEntity {
   @Column({ type: "enum", enum: ["maintenance", "manual_block"] })
   type!: "maintenance" | "manual_block";
 
-  @Column({ type: "uuid" })
-  reference_id!: string;
+  @Column({ type: "int" })
+  reference_id!: number;
 
   @CreateDateColumn()
   created_at!: Date;

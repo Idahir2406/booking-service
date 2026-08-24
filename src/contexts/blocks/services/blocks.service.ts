@@ -83,7 +83,7 @@ export class BlocksService {
   }
 
   async find_by_room_and_range(
-    room_id: string,
+    room_id: number,
     from_iso: string,
     to_iso: string,
   ): Promise<BlocksEntity[]> {
@@ -99,7 +99,7 @@ export class BlocksService {
 
   async find_blocking_overlap(
     site_id: number,
-    room_id: string,
+    room_id: number,
     checkin: string,
     checkout: string,
   ): Promise<BlocksEntity | null> {
@@ -108,11 +108,12 @@ export class BlocksService {
       .where("b.site_id = :site_id", { site_id })
       .andWhere("b.room_id = :room_id", { room_id })
       .andWhere("b.start_date < :checkout", { checkout })
-      .andWhere("b.end_date > :checkin", { checkin })
+      // end_date is inclusive (last blocked calendar day / night).
+      .andWhere("b.end_date >= :checkin", { checkin })
       .getOne();
   }
 
-  async find_one(id: string) {
+  async find_one(id: number) {
     const row = await this.blocks_repository.findOne({ where: { id } });
     if (!row) {
       throw new NotFoundException(`block with id ${id} not found`);
@@ -120,7 +121,7 @@ export class BlocksService {
     return row;
   }
 
-  async update(id: string, update_dto: UpdateBlocksDto) {
+  async update(id: number, update_dto: UpdateBlocksDto) {
     const payload = omit_undefined(update_dto as Record<string, unknown>);
     const merged = await this.blocks_repository.preload({
       id,
@@ -132,7 +133,7 @@ export class BlocksService {
     return this.blocks_repository.save(merged);
   }
 
-  async remove(id: string) {
+  async remove(id: number) {
     const row = await this.find_one(id);
     await this.blocks_repository.softRemove(row);
   }

@@ -44,11 +44,11 @@ export class ReservationEntity {
   @Column({ type: "int" })
   site_id!: number;
 
-  @Column({ type: "uuid" })
-  room_id!: string;
+  @Column({ type: "int" })
+  room_id!: number;
 
-  @Column({ type: "uuid", nullable: true })
-  board_option_id?: string;
+  @Column({ type: "int", nullable: true })
+  board_option_id?: number;
 
   @Column({ type: "jsonb", nullable: true })
   board_snapshot?: ReservationBoardSnapshot;

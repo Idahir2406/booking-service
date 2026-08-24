@@ -1,11 +1,12 @@
-import { IsDateString, IsInt, IsOptional, IsUUID, Min } from "class-validator";
+import { IsDateString, IsInt, IsOptional, Min } from "class-validator";
 
 export class QuoteReservationDto {
   @IsInt()
   site_id!: number;
 
-  @IsUUID()
-  room_id!: string;
+  @IsInt()
+  @Min(1)
+  room_id!: number;
 
   @IsDateString()
   checkin!: string;
@@ -22,6 +23,7 @@ export class QuoteReservationDto {
   pets!: number;
 
   @IsOptional()
-  @IsUUID()
-  board_option_id?: string;
+  @IsInt()
+  @Min(1)
+  board_option_id?: number;
 }

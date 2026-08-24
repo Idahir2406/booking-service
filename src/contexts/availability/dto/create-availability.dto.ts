@@ -6,7 +6,6 @@ import {
   IsInt,
   IsNumber,
   IsOptional,
-  IsUUID,
   Min,
 } from "class-validator";
 
@@ -21,8 +20,8 @@ export class CreateAvailabilityDto {
   @IsNumber()
   site_id!: number;
 
-  @IsUUID()
-  room_id!: string;
+  @IsInt()
+  room_id!: number;
 
   @IsOptional()
   @IsBoolean()

@@ -13,8 +13,8 @@ import {
   unique: true,
 })
 export class AvailabilityEntity {
-  @PrimaryGeneratedColumn("uuid")
-  id!: string;
+  @PrimaryGeneratedColumn({ type: "int" })
+  id!: number;
 
   @Column({ type: "date" })
   date!: Date;
@@ -22,8 +22,8 @@ export class AvailabilityEntity {
   @Column({ type: "int" })
   site_id!: number;
 
-  @Column({ type: "uuid" })
-  room_id!: string;
+  @Column({ type: "int" })
+  room_id!: number;
 
   @Column({ type: "boolean", default: false })
   is_available!: boolean;

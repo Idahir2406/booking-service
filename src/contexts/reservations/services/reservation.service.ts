@@ -13,7 +13,7 @@ import {
 } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, LessThan, MoreThan, Repository } from "typeorm";
+import { LessThan, Repository } from "typeorm";
 
 import { Site } from "@/src/types/site.types";
 
@@ -36,6 +36,7 @@ import {
 import {
   computeReservationPolicyCapabilities,
   formatUtcIsoDate,
+  isReservationBlockingInventory,
   parseIsoDateAtUtcMidnight,
 } from "../utils/reservation-policy.util";
 
@@ -506,29 +507,49 @@ export class ReservationService {
     from_iso: string,
     to_iso: string,
   ): Promise<ReservationWithRoomName[]> {
+    await this.cancelExpiredPendingForSite(site_id);
+
+    const now = new Date();
     const rows = await this.reservationRepository
       .createQueryBuilder("r")
       .where("r.site_id = :site_id", { site_id })
-      .andWhere("r.status IN (:...sts)", {
-        sts: ["pending", "confirmed", "finalized"],
-      })
       .andWhere("r.checkin <= :to_iso", { to_iso })
-      .andWhere("r.checkout >= :from_iso", { from_iso })
+      .andWhere("r.checkout > :from_iso", { from_iso })
+      .andWhere(
+        `(
+          r.payment_status = :paid
+          OR r.status IN (:...blockingStatuses)
+          OR (r.status = :pending AND r.expiration_date > :now)
+        )`,
+        {
+          paid: "paid" satisfies PaymentStatusValue,
+          blockingStatuses: ["confirmed", "finalized"] satisfies StatusValue[],
+          pending: "pending" satisfies StatusValue,
+          now,
+        },
+      )
+      .andWhere("r.status != :cancelled", {
+        cancelled: "cancelled" satisfies StatusValue,
+      })
       .orderBy("r.checkin", "ASC")
       .addOrderBy("r.id", "ASC")
       .getMany();
-    const roomIds = [...new Set(rows.map(row => row.room_id))];
+
+    const activeRows = rows.filter(row =>
+      isReservationBlockingInventory(row, now),
+    );
+    const roomIds = [...new Set(activeRows.map(row => row.room_id))];
     const roomNames = new Map<string, string>();
     for (const roomId of roomIds) {
       try {
         const room = await this.roomsService.findOne(roomId);
-        roomNames.set(roomId, room.name);
+        roomNames.set(String(roomId), room.name);
       } catch {
-        roomNames.set(roomId, "");
+        roomNames.set(String(roomId), "");
       }
     }
 
-    return rows.map(row => {
+    return activeRows.map(row => {
       const subtotal = row.subtotal;
       const checkinMs = new Date(row.checkin).getTime();
       const checkoutMs = new Date(row.checkout).getTime();
@@ -549,7 +570,7 @@ export class ReservationService {
         subtotal,
         commission: row.commission,
         total: row.total,
-        room_name: roomNames.get(row.room_id) ?? null,
+        room_name: roomNames.get(String(row.room_id)) ?? null,
         nights,
         base_subtotal,
         can_cancel: policy.can_cancel,
@@ -562,23 +583,56 @@ export class ReservationService {
 
   private async findOverlappingReservation(
     site_id: number,
-    room_id: string,
+    room_id: number,
     checkin: string,
     checkout: string,
   ) {
-    return this.reservationRepository.findOne({
+    const now = new Date();
+    const row = await this.reservationRepository
+      .createQueryBuilder("r")
+      .where("r.site_id = :site_id", { site_id })
+      .andWhere("r.room_id = :room_id", { room_id })
+      .andWhere("r.checkin < :checkout", { checkout })
+      .andWhere("r.checkout > :checkin", { checkin })
+      .andWhere(
+        `(
+          r.payment_status = :paid
+          OR r.status IN (:...blockingStatuses)
+          OR (r.status = :pending AND r.expiration_date > :now)
+        )`,
+        {
+          paid: "paid" satisfies PaymentStatusValue,
+          blockingStatuses: ["confirmed", "finalized"] satisfies StatusValue[],
+          pending: "pending" satisfies StatusValue,
+          now,
+        },
+      )
+      .andWhere("r.status != :cancelled", {
+        cancelled: "cancelled" satisfies StatusValue,
+      })
+      .getOne();
+
+    if (!row || !isReservationBlockingInventory(row, now)) {
+      return null;
+    }
+    return row;
+  }
+
+  private async cancelExpiredPendingForSite(site_id: number) {
+    const expired = await this.reservationRepository.find({
       where: {
         site_id,
-        room_id,
-        status: In([
-          "pending",
-          "confirmed",
-          "finalized",
-        ] satisfies StatusValue[]),
-        checkin: LessThan(checkout),
-        checkout: MoreThan(checkin),
+        status: "pending",
+        payment_status: "pending",
+        expiration_date: LessThan(new Date()),
       },
     });
+
+    if (expired.length === 0) {
+      return;
+    }
+
+    await Promise.all(expired.map(reservation => this.cancel(reservation.id)));
   }
 
   async saveStripeCheckoutSessionId(id: number, checkoutSessionId: string) {
@@ -782,6 +836,7 @@ export class ReservationService {
     const reservations = await this.reservationRepository.find({
       where: {
         status: "pending",
+        payment_status: "pending",
         expiration_date: LessThan(new Date()),
       },
     });

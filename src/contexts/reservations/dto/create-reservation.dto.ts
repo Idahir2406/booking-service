@@ -1,4 +1,4 @@
-import { IsDateString, IsIn, IsInt, IsNumber, IsUUID } from "class-validator";
+import { IsDateString, IsIn, IsInt, IsNumber, Min } from "class-validator";
 
 import { source_values, SourceValue } from "../entities/reservation.entity";
 
@@ -6,8 +6,9 @@ export class CreateReservationDto {
   @IsInt()
   site_id!: number;
 
-  @IsUUID()
-  room_id!: string;
+  @IsInt()
+  @Min(1)
+  room_id!: number;
 
   @IsIn(source_values)
   source!: SourceValue;

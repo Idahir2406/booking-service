@@ -7,7 +7,6 @@ import {
   HttpStatus,
   Param,
   ParseIntPipe,
-  ParseUUIDPipe,
   Patch,
   Post,
 } from "@nestjs/common";
@@ -45,7 +44,7 @@ export class RoomsController {
 
   @Patch(":id")
   update(
-    @Param("id", ParseUUIDPipe) id: string,
+    @Param("id", ParseIntPipe) id: number,
     @Body() updateDto: UpdateRoomDto,
   ): Promise<RoomEntity> {
     return this.roomsService.update(id, updateDto);
@@ -53,7 +52,7 @@ export class RoomsController {
 
   @Delete(":id")
   @HttpCode(HttpStatus.NO_CONTENT)
-  async remove(@Param("id", ParseUUIDPipe) id: string): Promise<void> {
+  async remove(@Param("id", ParseIntPipe) id: number): Promise<void> {
     await this.roomsService.remove(id);
   }
 }

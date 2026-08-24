@@ -74,7 +74,7 @@ export class AvailabilityService {
     });
   }
 
-  async findOne(id: string) {
+  async findOne(id: number) {
     const row = await this.availabilityRepository.findOne({ where: { id } });
     if (!row) {
       throw new NotFoundException(`availability with id ${id} not found`);
@@ -82,7 +82,7 @@ export class AvailabilityService {
     return row;
   }
 
-  async update(id: string, update_dto: UpdateAvailabilityDto) {
+  async update(id: number, update_dto: UpdateAvailabilityDto) {
     const availability = await this.availabilityRepository.preload({
       id,
       ...update_dto,
@@ -93,7 +93,7 @@ export class AvailabilityService {
     return this.availabilityRepository.save(availability);
   }
 
-  async remove(id: string) {
+  async remove(id: number) {
     const row = await this.findOne(id);
     await this.availabilityRepository.remove(row);
   }
@@ -118,7 +118,7 @@ export class AvailabilityService {
     from_date,
     to_date,
   }: {
-    room_id: string;
+    room_id: number;
     from_date: Date;
     to_date: Date;
   }) {
@@ -141,7 +141,7 @@ export class AvailabilityService {
   }
 
   async findByRoomAndIsoRange(
-    room_id: string,
+    room_id: number,
     from_iso: string,
     to_iso: string,
   ): Promise<AvailabilityEntity[]> {
@@ -159,7 +159,7 @@ export class AvailabilityService {
     to_date,
   }: {
     site_id: number;
-    room_id: string;
+    room_id: number;
     from_date: Date;
     to_date: Date;
   }) {

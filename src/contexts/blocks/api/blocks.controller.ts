@@ -9,7 +9,6 @@ import {
   Param,
   ParseBoolPipe,
   ParseIntPipe,
-  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -57,7 +56,7 @@ export class BlocksController {
   /** Calendario por habitación. */
   @Get("by-room/:room_id/range")
   async find_by_room_range(
-    @Param("room_id", ParseUUIDPipe) room_id: string,
+    @Param("room_id", ParseIntPipe) room_id: number,
     @Query() range: DateRangeQueryDto,
   ): Promise<BlocksEntity[]> {
     const rows = await this.blocks_service.find_by_room_and_range(
@@ -82,13 +81,13 @@ export class BlocksController {
   }
 
   @Get(":id")
-  find_one(@Param("id", ParseUUIDPipe) id: string) {
+  find_one(@Param("id", ParseIntPipe) id: number) {
     return this.blocks_service.find_one(id);
   }
 
   @Patch(":id")
   update(
-    @Param("id", ParseUUIDPipe) id: string,
+    @Param("id", ParseIntPipe) id: number,
     @Body() update_dto: UpdateBlocksDto,
   ) {
     return this.blocks_service.update(id, update_dto);
@@ -96,7 +95,7 @@ export class BlocksController {
 
   @Delete(":id")
   @HttpCode(HttpStatus.NO_CONTENT)
-  async remove(@Param("id", ParseUUIDPipe) id: string) {
+  async remove(@Param("id", ParseIntPipe) id: number) {
     await this.blocks_service.remove(id);
   }
 }

@@ -26,7 +26,7 @@ export interface BoardOptionSnapshot {
 }
 
 export interface ResolvedBoardOption {
-  id: string;
+  id: number;
   code: string;
   name: string;
   description: string | null;
@@ -39,7 +39,7 @@ export class RoomBoardOptionsService {
   constructor(
     @InjectRepository(RoomBoardOptionEntity)
     private readonly roomBoardOptionsRepository: Repository<RoomBoardOptionEntity>,
-  ) {}
+  ) { }
 
   buildDefaultRoomOnlyOption(): CreateRoomBoardOptionDto {
     return {
@@ -53,7 +53,7 @@ export class RoomBoardOptionsService {
   }
 
   resolveBoardTypeLabel(code: string): string {
-    return BOARD_TYPE_LABELS[code as BoardTypeValue] ?? code;
+    return BOARD_TYPE_LABELS[code as BoardTypeValue] || code;
   }
 
   validateBoardOptions(boardOptions: CreateRoomBoardOptionDto[]): void {
@@ -111,7 +111,7 @@ export class RoomBoardOptionsService {
     }
     return boardOptions.map((opt, index) => ({
       ...opt,
-      description: opt.description?.trim() || undefined,
+      description: opt.description?.trim(),
       is_included: opt.is_included ?? false,
       is_default: opt.is_default ?? false,
       is_active: opt.is_active ?? true,
@@ -122,7 +122,7 @@ export class RoomBoardOptionsService {
 
   async replaceBoardOptions(
     manager: EntityManager,
-    roomId: string,
+    roomId: number,
     boardOptions: CreateRoomBoardOptionDto[],
   ): Promise<RoomBoardOptionEntity[]> {
     const normalized = this.normalizeBoardOptionsInput(boardOptions);
@@ -147,7 +147,7 @@ export class RoomBoardOptionsService {
   }
 
   async findActiveBoardOptionsByRoom(
-    roomId: string,
+    roomId: number,
   ): Promise<RoomBoardOptionEntity[]> {
     return this.roomBoardOptionsRepository.find({
       where: {
@@ -160,7 +160,7 @@ export class RoomBoardOptionsService {
 
   resolveBoardOptionFromList(
     boardOptions: RoomBoardOptionEntity[],
-    boardOptionId?: string,
+    boardOptionId?: number,
   ): RoomBoardOptionEntity {
     if (boardOptions.length === 0) {
       throw new BadRequestException(

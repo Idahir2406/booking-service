@@ -8,6 +8,53 @@ export interface ReservationPolicyInput {
   checkout: string;
 }
 
+export interface ReservationInventoryHoldInput {
+  status: string;
+  payment_status: string;
+  expiration_date?: Date | string | null;
+}
+
+/**
+ * Whether a reservation still blocks inventory / calendar dates.
+ * - confirmed / finalized: always
+ * - paid (any non-cancelled flow): always, expiration ignored
+ * - pending unpaid: only while expiration_date is in the future
+ */
+export function isReservationBlockingInventory(
+  reservation: ReservationInventoryHoldInput,
+  now: Date = new Date(),
+): boolean {
+  const status = String(reservation.status || "").toLowerCase();
+  const paymentStatus = String(reservation.payment_status || "").toLowerCase();
+
+  if (status === "cancelled") {
+    return false;
+  }
+
+  if (paymentStatus === "paid") {
+    return true;
+  }
+
+  if (status === "confirmed" || status === "finalized") {
+    return true;
+  }
+
+  if (status !== "pending") {
+    return false;
+  }
+
+  if (!reservation.expiration_date) {
+    return true;
+  }
+
+  const expiresAt = new Date(reservation.expiration_date);
+  if (Number.isNaN(expiresAt.getTime())) {
+    return true;
+  }
+
+  return expiresAt.getTime() > now.getTime();
+}
+
 export interface ReservationPolicyCapabilities {
   can_cancel: boolean;
   can_refund: boolean;

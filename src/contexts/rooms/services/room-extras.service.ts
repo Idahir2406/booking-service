@@ -41,7 +41,7 @@ export class RoomExtrasService {
 
   async replaceRoomExtras(
     manager: EntityManager,
-    roomId: string,
+    roomId: number,
     extras: CreateRoomExtraDto[],
   ): Promise<RoomExtraEntity[]> {
     const normalized = this.normalizeExtrasInput(extras);
@@ -53,7 +53,7 @@ export class RoomExtrasService {
       manager.create(RoomExtraEntity, {
         room_id: roomId,
         name: extra.name.trim(),
-        description: extra.description?.trim() || undefined,
+        description: extra.description?.trim(),
         pricing_mode: extra.pricing_mode,
         price: extra.price,
         is_active: extra.is_active ?? true,
@@ -68,7 +68,7 @@ export class RoomExtrasService {
     return manager.save(RoomExtraEntity, rows);
   }
 
-  async findActiveExtrasByRoom(roomId: string): Promise<RoomExtraEntity[]> {
+  async findActiveExtrasByRoom(roomId: number): Promise<RoomExtraEntity[]> {
     return this.roomExtrasRepository.find({
       where: {
         room_id: roomId,

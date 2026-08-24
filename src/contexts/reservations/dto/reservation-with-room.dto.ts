@@ -4,7 +4,7 @@ import type { ReservationPolicyCapabilities } from "../utils/reservation-policy.
 export interface ReservationWithRoomName extends ReservationPolicyCapabilities {
   id: number;
   site_id: number;
-  room_id: string;
+  room_id: number;
   room_name: string | null;
   source: string;
   external_reservation_id?: string;
@@ -17,7 +17,7 @@ export interface ReservationWithRoomName extends ReservationPolicyCapabilities {
   checkout: string;
   guests: number;
   pets: number;
-  board_option_id?: string;
+  board_option_id?: number;
   board_snapshot?: ReservationBoardSnapshot | null;
   extras_snapshot?: unknown;
   subtotal: number | null;

@@ -7,7 +7,6 @@ import {
   HttpStatus,
   Param,
   ParseIntPipe,
-  ParseUUIDPipe,
   Patch,
   Post,
   Query,
@@ -55,7 +54,7 @@ export class AvailabilityController {
   /** Calendario por habitación. */
   @Get("by-room/:room_id/range")
   async findByRoomAndRange(
-    @Param("room_id", ParseUUIDPipe) room_id: string,
+    @Param("room_id", ParseIntPipe) room_id: number,
     @Query() range: DateRangeQueryDto,
   ): Promise<AvailabilityEntity[]> {
     const rows = await this.availability_service.findByRoomAndIsoRange(
@@ -68,13 +67,13 @@ export class AvailabilityController {
   }
 
   @Get(":id")
-  findOne(@Param("id", ParseUUIDPipe) id: string) {
+  findOne(@Param("id", ParseIntPipe) id: number) {
     return this.availability_service.findOne(id);
   }
 
   @Patch(":id")
   update(
-    @Param("id", ParseUUIDPipe) id: string,
+    @Param("id", ParseIntPipe) id: number,
     @Body() update_dto: UpdateAvailabilityDto,
   ) {
     return this.availability_service.update(id, update_dto);
@@ -82,7 +81,7 @@ export class AvailabilityController {
 
   @Delete(":id")
   @HttpCode(HttpStatus.NO_CONTENT)
-  async remove(@Param("id", ParseUUIDPipe) id: string) {
+  async remove(@Param("id", ParseIntPipe) id: number) {
     await this.availability_service.remove(id);
   }
 }

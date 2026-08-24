@@ -1,5 +1,5 @@
 import { Type } from "class-transformer";
-import { IsDateString, IsIn, IsInt, IsUUID, Min } from "class-validator";
+import { IsDateString, IsIn, IsInt, Min } from "class-validator";
 
 export const block_type_values = ["maintenance", "manual_block"] as const;
 
@@ -11,8 +11,9 @@ export class CreateBlocksDto {
   @Min(1)
   site_id!: number;
 
-  @IsUUID()
-  room_id!: string;
+  @IsInt()
+  @Min(1)
+  room_id!: number;
 
   @IsDateString()
   start_date!: string;
@@ -23,6 +24,7 @@ export class CreateBlocksDto {
   @IsIn(block_type_values)
   type!: BlockTypeValue;
 
-  @IsUUID()
-  reference_id!: string;
+  @IsInt()
+  @Min(1)
+  reference_id!: number;
 }

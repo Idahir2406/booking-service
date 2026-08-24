@@ -14,8 +14,8 @@ import { RoomExtraEntity } from "./room-extra.entity";
 @Entity("rooms")
 @Index("idx_rooms_site_id", ["site_id"])
 export class RoomEntity {
-  @PrimaryGeneratedColumn("uuid")
-  id!: string;
+  @PrimaryGeneratedColumn({ type: "int" })
+  id!: number;
 
   @Column({ type: "int" })
   site_id!: number;
