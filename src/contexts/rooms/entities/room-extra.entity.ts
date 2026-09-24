@@ -38,7 +38,7 @@ export class RoomExtraEntity {
   @Column({ type: "enum", enum: extra_pricing_mode_values })
   pricing_mode!: ExtraPricingModeValue;
 
-  @Column({ type: "numeric", default: 0 })
+  @Column({ type: "decimal", precision: 10, scale: 2, default: 0 })
   price!: number;
 
   @Column({ type: "boolean", default: true })

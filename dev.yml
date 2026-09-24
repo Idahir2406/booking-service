@@ -5,11 +5,15 @@ services:
     env_file: .env
     depends_on:
       - redis
-      - db
     environment:
-      # Dentro del contenedor, localhost es el propio contenedor.
-      # host.docker.internal apunta al Mac donde corre XAMPP/MySQL.
-      DB_HOST: host.docker.internal
+      # MariaDB de viajes4patas/web (usuario jefesito). Misma red Docker: web_default.
+      DB_HOST: v4p-db
+      DB_PORT: 3306
+      DB_USERNAME: jefesito
+      DB_PASSWORD: loputoamo69
+      DB_DATABASE: v4pdb
+      DATABASE_URL: mysql://jefesito:loputoamo69@v4p-db:3306/v4pdb
+      DATABASE_MIGRATIONS_URL: mysql://jefesito:loputoamo69@v4p-db:3306/v4pdb
       REDIS_HOST: redis
       REDIS_PORT: 6379
     extra_hosts:
@@ -24,6 +28,9 @@ services:
       - "9229:9229"
     volumes:
       - ./src:/app/src
+    networks:
+      - default
+      - web_db
     deploy:
       resources:
         limits:
@@ -33,23 +40,19 @@ services:
           cpus: "0.25"
           memory: "256m"
 
-  db:
-    image: postgres:18
-    volumes:
-      - ./postgres_data:/var/lib/postgresql
-    ports:
-      - "${POSTGRES_PORT:-5434}:5432"
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-
   redis:
     image: redis:7.4.1-alpine
     volumes:
       - ./redis_data:/data
     restart: unless-stopped
+    networks:
+      - default
+
+networks:
+  default:
+  web_db:
+    external: true
+    name: web_default
 
 volumes:
-  postgres_data:
   redis_data:

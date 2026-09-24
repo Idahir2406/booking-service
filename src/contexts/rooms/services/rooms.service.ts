@@ -192,21 +192,19 @@ export class RoomsService {
   }
 
   private filterActiveRelations(room: RoomEntity): RoomEntity {
-    room.board_options = (room.board_options).filter(
-      option => option.is_active,
-    );
-    room.extras = (room.extras).filter(extra => extra.is_active);
+    room.board_options = room.board_options.filter(option => option.is_active);
+    room.extras = room.extras.filter(extra => extra.is_active);
     return room;
   }
 
   private sortRoomRelations(room: RoomEntity): RoomEntity {
-    room.board_options = [...(room.board_options)].sort((a, b) => {
+    room.board_options = [...room.board_options].sort((a, b) => {
       if (a.sort_order !== b.sort_order) {
         return a.sort_order - b.sort_order;
       }
       return String(a.id).localeCompare(String(b.id));
     });
-    room.extras = [...(room.extras)].sort((a, b) => {
+    room.extras = [...room.extras].sort((a, b) => {
       if (a.sort_order !== b.sort_order) {
         return a.sort_order - b.sort_order;
       }

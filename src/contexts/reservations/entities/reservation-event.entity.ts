@@ -18,7 +18,7 @@ export class ReservationEventEntity {
   @Column({ type: "text" })
   event_type!: string;
 
-  @Column({ type: "jsonb", nullable: true })
+  @Column({ type: "json", nullable: true })
   payload?: Record<string, unknown>;
 
   @CreateDateColumn()

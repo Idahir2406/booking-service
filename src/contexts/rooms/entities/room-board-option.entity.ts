@@ -37,7 +37,7 @@ export class RoomBoardOptionEntity {
   @Column({ type: "text", nullable: true })
   description?: string | null;
 
-  @Column({ type: "numeric", default: 0 })
+  @Column({ type: "decimal", precision: 10, scale: 2, default: 0 })
   price!: number;
 
   @Column({ type: "boolean", default: false })

@@ -1,8 +1,12 @@
+import type { SiteUnitEntity } from "@/contexts/site-unit/entities/site-unit.entity";
+
 import {
   Column,
   CreateDateColumn,
   Entity,
   Index,
+  JoinColumn,
+  ManyToOne,
   OneToMany,
   PrimaryGeneratedColumn,
   UpdateDateColumn,
@@ -20,13 +24,21 @@ export class RoomEntity {
   @Column({ type: "int" })
   site_id!: number;
 
+  // Unit type (catalog); null until the host classifies the unit
+  @Column({ type: "int", nullable: true })
+  site_unit_id!: number | null;
+
+  @ManyToOne("SiteUnitEntity", { onDelete: "SET NULL", nullable: true })
+  @JoinColumn({ name: "site_unit_id" })
+  site_unit!: SiteUnitEntity | null;
+
   @Column({ type: "text" })
   name!: string;
 
   @Column({ type: "text", nullable: true })
   description?: string;
 
-  @Column({ type: "numeric" })
+  @Column({ type: "decimal", precision: 10, scale: 2 })
   price_per_night!: number;
 
   @Column({ type: "int" })

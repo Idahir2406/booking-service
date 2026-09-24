@@ -50,10 +50,10 @@ export class ReservationEntity {
   @Column({ type: "int", nullable: true })
   board_option_id?: number;
 
-  @Column({ type: "jsonb", nullable: true })
+  @Column({ type: "json", nullable: true })
   board_snapshot?: ReservationBoardSnapshot;
 
-  @Column({ type: "jsonb", nullable: true })
+  @Column({ type: "json", nullable: true })
   extras_snapshot?: unknown;
 
   @Column({ type: "enum", enum: source_values })
@@ -89,13 +89,13 @@ export class ReservationEntity {
   @Column({ type: "int" })
   pets!: number;
 
-  @Column({ type: "numeric", nullable: true })
+  @Column({ type: "decimal", precision: 10, scale: 2, nullable: true })
   subtotal!: number;
 
-  @Column({ type: "numeric", nullable: true })
+  @Column({ type: "decimal", precision: 10, scale: 2, nullable: true })
   commission!: number;
 
-  @Column({ type: "numeric", nullable: true })
+  @Column({ type: "decimal", precision: 10, scale: 2, nullable: true })
   total!: number;
 
   @Column({ type: "enum", enum: status_values })

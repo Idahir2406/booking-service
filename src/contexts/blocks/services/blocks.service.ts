@@ -103,14 +103,16 @@ export class BlocksService {
     checkin: string,
     checkout: string,
   ): Promise<BlocksEntity | null> {
-    return this.blocks_repository
-      .createQueryBuilder("b")
-      .where("b.site_id = :site_id", { site_id })
-      .andWhere("b.room_id = :room_id", { room_id })
-      .andWhere("b.start_date < :checkout", { checkout })
-      // end_date is inclusive (last blocked calendar day / night).
-      .andWhere("b.end_date >= :checkin", { checkin })
-      .getOne();
+    return (
+      this.blocks_repository
+        .createQueryBuilder("b")
+        .where("b.site_id = :site_id", { site_id })
+        .andWhere("b.room_id = :room_id", { room_id })
+        .andWhere("b.start_date < :checkout", { checkout })
+        // end_date is inclusive (last blocked calendar day / night).
+        .andWhere("b.end_date >= :checkin", { checkin })
+        .getOne()
+    );
   }
 
   async find_one(id: number) {

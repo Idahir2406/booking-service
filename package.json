@@ -67,8 +67,10 @@
     "mysql2": "^3.22.3",
     "nodemailer": "^9.0.3",
     "pg": "^8.20.0",
+    "qs": "^6.16.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
+    "slugify": "^1.6.9",
     "stripe": "^22.1.1",
     "typeorm": "^0.3.28",
     "zod": "^4.4.2"
@@ -88,6 +90,7 @@
     "@types/mysql": "^2.15.27",
     "@types/node": "^22.8.7",
     "@types/nodemailer": "^8.0.1",
+    "@types/qs": "^6.15.1",
     "@types/supertest": "^6.0.3",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",

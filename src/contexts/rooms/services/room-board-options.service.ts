@@ -39,7 +39,7 @@ export class RoomBoardOptionsService {
   constructor(
     @InjectRepository(RoomBoardOptionEntity)
     private readonly roomBoardOptionsRepository: Repository<RoomBoardOptionEntity>,
-  ) { }
+  ) {}
 
   buildDefaultRoomOnlyOption(): CreateRoomBoardOptionDto {
     return {

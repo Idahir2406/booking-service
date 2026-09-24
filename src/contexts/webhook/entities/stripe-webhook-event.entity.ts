@@ -2,13 +2,13 @@ import { Column, Entity, PrimaryColumn } from "typeorm";
 
 @Entity("stripe_webhook_events")
 export class StripeWebhookEventEntity {
-  @PrimaryColumn({ type: "text" })
+  @PrimaryColumn({ type: "varchar", length: 255 })
   stripe_event_id!: string;
 
-  @Column({ type: "text" })
+  @Column({ type: "varchar", length: 255 })
   type!: string;
 
-  @Column({ type: "jsonb", nullable: true })
+  @Column({ type: "json", nullable: true })
   payload?: Record<string, unknown>;
 
   @Column({ type: "timestamp" })
