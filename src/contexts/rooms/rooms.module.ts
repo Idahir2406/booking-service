@@ -1,6 +1,8 @@
 import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 
+import { SiteUnitEntity } from "@/contexts/site-unit/entities/site-unit.entity";
+
 import { RoomsController } from "./api/rooms.controller";
 import { RoomEntity } from "./entities/room.entity";
 import { RoomBoardOptionEntity } from "./entities/room-board-option.entity";
@@ -15,6 +17,7 @@ import { RoomsService } from "./services/rooms.service";
       RoomEntity,
       RoomBoardOptionEntity,
       RoomExtraEntity,
+      SiteUnitEntity,
     ]),
   ],
   controllers: [RoomsController],

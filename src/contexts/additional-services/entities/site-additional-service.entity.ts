@@ -15,6 +15,10 @@ import {
   answer_state_values,
   AnswerStateValue,
 } from "@/contexts/shared/types/answer-state";
+import {
+  service_pricing_mode_values,
+  ServicePricingModeValue,
+} from "@/contexts/shared/types/service-pricing-mode";
 
 @Entity("site_additional_services")
 @Unique("uq_site_additional_services_site_service", [
@@ -44,6 +48,10 @@ export class SiteAdditionalServiceEntity {
 
   @Column({ type: "decimal", precision: 10, scale: 2, nullable: true })
   price!: number | null;
+
+  // Only when state = yes and is_paid = true
+  @Column({ type: "enum", enum: service_pricing_mode_values, nullable: true })
+  pricing_mode!: ServicePricingModeValue | null;
 
   @CreateDateColumn()
   created_at!: Date;

@@ -7,6 +7,8 @@ export interface SendMailOptions {
   to: string;
   subject: string;
   html: string;
+  /** Optional plain-text alternative. */
+  text?: string;
 }
 
 @Injectable()
@@ -25,6 +27,7 @@ export class MailService {
       host: envs.SMTP_HOST,
       port: envs.SMTP_PORT,
       secure: envs.SMTP_SECURE,
+      name: envs.SMTP_HELO ?? "viajes4patas.com",
       auth: {
         user: envs.SMTP_USER,
         pass: envs.SMTP_PASS,
@@ -54,6 +57,7 @@ export class MailService {
         to,
         subject: options.subject,
         html: options.html,
+        ...(options.text ? { text: options.text } : {}),
         encoding: "utf8",
       });
       return true;

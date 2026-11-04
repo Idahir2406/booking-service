@@ -1,6 +1,13 @@
-import { Body, Controller, ForbiddenException, Post } from "@nestjs/common";
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Post,
+  UseGuards,
+} from "@nestjs/common";
 
 import { envs } from "../shared/configs/envs";
+import { InternalApiKeyGuard } from "../shared/guards/internal-api-key.guard";
 import { SendTestMailDto } from "./dto/send-test-mail.dto";
 import { MailQueueService } from "./mail-queue.service";
 
@@ -8,6 +15,7 @@ import { MailQueueService } from "./mail-queue.service";
   path: "mail",
   version: "1",
 })
+@UseGuards(InternalApiKeyGuard)
 export class MailController {
   constructor(private readonly mailQueueService: MailQueueService) {}
 

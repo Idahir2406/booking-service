@@ -8,12 +8,26 @@ import { HealthModule } from "@/app/health/health.module";
 
 import { LoggerModule } from "@/shared/logger/logger.module";
 
+import { AdditionalServicesModule } from "@/contexts/additional-services/additional-services.module";
 import { AvailabilityModule } from "@/contexts/availability/availability.module";
 import { BlocksModule } from "@/contexts/blocks/blocks.module";
+import { CatalogsModule } from "@/contexts/catalogs/catalogs.module";
+import { ClosestServicesModule } from "@/contexts/closest-services/closest-services.module";
+import { CommonZonesModule } from "@/contexts/common-zones/common-zones.module";
+import { DogSizesModule } from "@/contexts/dog-sizes/dog-sizes.module";
+import { DogSuppliesModule } from "@/contexts/dog-supplies/dog-supplies.module";
+import { FaqModule } from "@/contexts/faq/faq.module";
+import { GeographyModule } from "@/contexts/geography/geography.module";
 import { MailModule } from "@/contexts/mail/mail.module";
+import { PaymentsModule } from "@/contexts/payments/payments.module";
+import { PetPoliciesModule } from "@/contexts/pet-policies/pet-policies.module";
 import { ReservationModule } from "@/contexts/reservations/reservation.module";
 import { RoomsModule } from "@/contexts/rooms/rooms.module";
 import { envs } from "@/contexts/shared/configs/envs";
+import { SiteUnitModule } from "@/contexts/site-unit/site-unit.module";
+import { SiteWizardModule } from "@/contexts/site-wizard/site-wizard.module";
+import { SpeciesModule } from "@/contexts/species/species.module";
+import { TravelerDogsModule } from "@/contexts/traveler-dogs/traveler-dogs.module";
 
 import { StripeModule } from "../contexts/stripe/stripe.module";
 import { WebhookModule } from "../contexts/webhook/webhook.module";
@@ -42,11 +56,28 @@ import { WebhookModule } from "../contexts/webhook/webhook.module";
     LoggerModule,
     HealthModule,
     StripeModule,
+    PaymentsModule,
     AvailabilityModule,
     BlocksModule,
     ReservationModule,
+    // Panel del viajero F-PV5: "Mis perros" (internal, X-Internal-Key)
+    TravelerDogsModule,
     RoomsModule,
     WebhookModule,
+    // Entity-only modules (dog module): register entities for autoLoadEntities
+    SpeciesModule,
+    DogSizesModule,
+    DogSuppliesModule,
+    AdditionalServicesModule,
+    ClosestServicesModule,
+    FaqModule,
+    CommonZonesModule,
+    PetPoliciesModule,
+    SiteUnitModule,
+    // Accommodation onboarding wizard (internal, X-Internal-Key)
+    CatalogsModule,
+    GeographyModule,
+    SiteWizardModule,
   ],
 })
 export class AppModule {}

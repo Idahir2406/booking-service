@@ -1,14 +1,25 @@
-import type { Repository } from "typeorm";
+import type { EntityManager, Repository } from "typeorm";
 
 import { BadRequestException } from "@nestjs/common";
+
+import { createEconomicsStub } from "@/tests/utils/economics";
 
 import { ReservationEntity } from "@/src/contexts/reservations/entities/reservation.entity";
 import { ReservationService } from "@/src/contexts/reservations/services/reservation.service";
 import { ReservationLifecycleService } from "@/src/contexts/reservations/services/reservation-lifecycle.service";
 import { computeReservationPolicyCapabilities } from "@/src/contexts/reservations/utils/reservation-policy.util";
 
+interface UpdateBuilderMock {
+  update: () => UpdateBuilderMock;
+  set: (value: unknown) => UpdateBuilderMock;
+  where: (sql: string, params: Record<string, unknown>) => UpdateBuilderMock;
+  andWhere: (sql: string, params: Record<string, unknown>) => UpdateBuilderMock;
+  execute: () => Promise<unknown>;
+}
+
 const SITE_ID = 42;
 const RESERVATION_ID = 7;
+const ROOM_ID = 3;
 
 const createReservation = (
   overrides: Partial<ReservationEntity> = {},
@@ -16,7 +27,7 @@ const createReservation = (
   Object.assign(new ReservationEntity(), {
     id: RESERVATION_ID,
     site_id: SITE_ID,
-    room_id: "00000000-0000-4000-8000-000000000001",
+    room_id: ROOM_ID,
     source: "internal",
     user_id: 10,
     checkin: "2026-07-16",
@@ -29,41 +40,60 @@ const createReservation = (
     status: "confirmed",
     payment_status: "paid",
     payout_status: "held",
+    refund_seq: 0,
+    stripe_payment_intent_id: "pi_test",
     expiration_date: new Date("2026-07-16T00:00:00.000Z"),
     created_at: new Date("2026-07-01T00:00:00.000Z"),
     updated_at: new Date("2026-07-01T00:00:00.000Z"),
     ...overrides,
   });
 
-const createFixture = (reservation = createReservation()) => {
+const createFixture = (initial = createReservation()) => {
+  // Persisted state shared by every transaction of the fixture.
+  let stored = createReservation(initial);
+  const lockedFindOne = vi.fn(
+    (options: { lock?: { mode: string } }): Promise<ReservationEntity> => {
+      expect(options.lock?.mode).toBe("pessimistic_write");
+      return Promise.resolve(createReservation(stored));
+    },
+  );
+  const save = vi.fn((value: ReservationEntity) => {
+    stored = createReservation(value);
+    return Promise.resolve(value);
+  });
+  const manager = {
+    getRepository: vi.fn(() => ({ findOne: lockedFindOne, save })),
+  } as unknown as EntityManager;
   const reservationRepository = {
-    findOne: vi.fn().mockResolvedValue(reservation),
-    preload: vi
-      .fn()
-      .mockImplementation((changes: Partial<ReservationEntity>) =>
-        Promise.resolve(createReservation({ ...reservation, ...changes })),
+    manager: {
+      transaction: vi.fn((run: (manager: EntityManager) => Promise<unknown>) =>
+        run(manager),
       ),
-    save: vi
-      .fn()
-      .mockImplementation((value: ReservationEntity) => Promise.resolve(value)),
+    },
   };
   const reservationService = {
-    releaseAvailabilityForReservation: vi.fn().mockResolvedValue(),
-    releaseRemainingAvailabilityForReservation: vi.fn().mockResolvedValue(),
+    releaseAvailabilityForReservation: vi.fn(() => Promise.resolve()),
+    releaseRemainingAvailabilityForReservation: vi.fn(() => Promise.resolve()),
     getSiteById: vi.fn().mockResolvedValue({ id: SITE_ID }),
   };
   const payoutService = {
-    refundReservation: vi.fn().mockResolvedValue(),
+    refundInTransaction: vi.fn(
+      (_manager: EntityManager, reservation: ReservationEntity) => {
+        reservation.payment_status = "refunded";
+        reservation.refund_seq += 1;
+        return Promise.resolve({ refundId: "re_1", isPartial: false });
+      },
+    ),
   };
   const feedbackService = {
     createFeedbackToken: vi.fn().mockResolvedValue("feedback-token"),
   };
   const reservationEmailService = {
-    sendCancelledEmails: vi.fn().mockResolvedValue(),
-    sendFinalizedEmails: vi.fn().mockResolvedValue(),
+    sendCancelledEmails: vi.fn(() => Promise.resolve()),
+    sendFinalizedEmails: vi.fn(() => Promise.resolve()),
   };
   const reservationEventService = {
-    logEvent: vi.fn().mockResolvedValue(),
+    logEventInTransaction: vi.fn(() => Promise.resolve()),
   };
 
   const service = new ReservationLifecycleService(
@@ -73,11 +103,13 @@ const createFixture = (reservation = createReservation()) => {
     feedbackService as never,
     reservationEmailService as never,
     reservationEventService as never,
+    createEconomicsStub() as never,
   );
 
   return {
     service,
-    reservationRepository,
+    save,
+    lockedFindOne,
     reservationService,
     payoutService,
     feedbackService,
@@ -95,57 +127,22 @@ describe("ReservationLifecycleService policy", () => {
     vi.useRealTimers();
   });
 
-  it("allows a refund exactly 24 hours before check-in", async () => {
+  it("rejects host unilateral cancellation (B10)", async () => {
     vi.setSystemTime(new Date("2026-07-15T00:00:00.000Z"));
-    const fixture = createFixture();
-
-    const result = await fixture.service.cancelReservation(RESERVATION_ID, {
-      site_id: SITE_ID,
-      refund: true,
-      reason: "Cambio de planes",
-    });
-
-    expect(fixture.payoutService.refundReservation).toHaveBeenCalledWith(
-      RESERVATION_ID,
-    );
-    expect(fixture.reservationRepository.preload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: RESERVATION_ID,
-        status: "cancelled",
-        payment_status: "refunded",
-        refund_on_cancel: true,
-      }),
-    );
-    expect(result.payment_status).toBe("refunded");
-  });
-
-  it("rejects a late refund but allows cancellation without refund", async () => {
-    vi.setSystemTime(new Date("2026-07-15T00:00:00.001Z"));
     const fixture = createFixture();
 
     await expect(
       fixture.service.cancelReservation(RESERVATION_ID, {
         site_id: SITE_ID,
         refund: true,
+        reason: "Cambio de planes",
       }),
-    ).rejects.toThrow(
-      "Refund is not allowed: less than 24 hours before check-in or payout already released",
-    );
+    ).rejects.toThrow(BadRequestException);
 
-    const result = await fixture.service.cancelReservation(RESERVATION_ID, {
-      site_id: SITE_ID,
-      refund: false,
-    });
-
-    expect(fixture.payoutService.refundReservation).not.toHaveBeenCalled();
-    expect(result.status).toBe("cancelled");
-    expect(result.refund_on_cancel).toBe(false);
-    expect(
-      fixture.reservationService.releaseAvailabilityForReservation,
-    ).toHaveBeenCalledOnce();
+    expect(fixture.payoutService.refundInTransaction).not.toHaveBeenCalled();
   });
 
-  it("allows cancellation without refund and finalization during the stay", async () => {
+  it("allows finalization during the stay when refund window has passed", async () => {
     vi.setSystemTime(new Date("2026-07-17T12:00:00.000Z"));
     const reservation = createReservation();
     const policy = computeReservationPolicyCapabilities(reservation);
@@ -157,15 +154,8 @@ describe("ReservationLifecycleService policy", () => {
       can_finalize: true,
     });
 
-    await fixture.service.cancelReservation(RESERVATION_ID, {
-      site_id: SITE_ID,
-      refund: false,
-    });
     await fixture.service.finalizeReservation(RESERVATION_ID, SITE_ID);
 
-    expect(
-      fixture.reservationService.releaseAvailabilityForReservation,
-    ).toHaveBeenCalledOnce();
     expect(
       fixture.reservationService.releaseRemainingAvailabilityForReservation,
     ).toHaveBeenCalledOnce();
@@ -181,7 +171,7 @@ describe("ReservationLifecycleService policy", () => {
       new BadRequestException("Cannot finalize before check-in date"),
     );
 
-    expect(fixture.reservationRepository.preload).not.toHaveBeenCalled();
+    expect(fixture.save).not.toHaveBeenCalled();
     expect(
       fixture.reservationService.releaseRemainingAvailabilityForReservation,
     ).not.toHaveBeenCalled();
@@ -189,15 +179,14 @@ describe("ReservationLifecycleService policy", () => {
 
   it("releases only remaining availability on early finalization and keeps payout held", async () => {
     vi.setSystemTime(new Date("2026-07-17T12:00:00.000Z"));
-    const reservation = createReservation({ payout_status: "held" });
-    const fixture = createFixture(reservation);
+    const fixture = createFixture(createReservation({ payout_status: "held" }));
 
     const result = await fixture.service.finalizeReservation(
       RESERVATION_ID,
       SITE_ID,
     );
 
-    expect(fixture.reservationRepository.preload).toHaveBeenCalledWith(
+    expect(fixture.save).toHaveBeenCalledWith(
       expect.objectContaining({
         id: RESERVATION_ID,
         status: "finalized",
@@ -210,21 +199,14 @@ describe("ReservationLifecycleService policy", () => {
     expect(
       fixture.reservationService.releaseAvailabilityForReservation,
     ).not.toHaveBeenCalled();
-    expect(fixture.payoutService.refundReservation).not.toHaveBeenCalled();
+    expect(fixture.payoutService.refundInTransaction).not.toHaveBeenCalled();
     expect(fixture.feedbackService.createFeedbackToken).toHaveBeenCalledOnce();
     expect(result.payout_status).toBe("held");
   });
 
-  it("rejects cancellation after checkout and still allows finalization", async () => {
+  it("allows finalization after checkout", async () => {
     vi.setSystemTime(new Date("2026-07-20T00:00:00.000Z"));
     const fixture = createFixture();
-
-    await expect(
-      fixture.service.cancelReservation(RESERVATION_ID, {
-        site_id: SITE_ID,
-        refund: false,
-      }),
-    ).rejects.toThrow("Cannot cancel after checkout; please finalize the stay");
 
     const result = await fixture.service.finalizeReservation(
       RESERVATION_ID,
@@ -247,21 +229,37 @@ describe("ReservationService remaining availability policy", () => {
     vi.useRealTimers();
   });
 
-  it("releases availability from today through the last reserved night", async () => {
+  it("releases availability from today through the last reserved night (UTC dates)", async () => {
     vi.setSystemTime(new Date("2026-07-17T12:00:00.000Z"));
-    const availabilityRows = [
-      { id: "availability-17" },
-      { id: "availability-18" },
-      { id: "availability-19" },
-    ];
-    const availabilityService = {
-      findByRoomAndIsoRange: vi.fn().mockResolvedValue(availabilityRows),
-      update: vi.fn().mockResolvedValue(),
+    const where: Record<string, unknown> = {};
+    const setCalls: unknown[] = [];
+    const builder: UpdateBuilderMock = {
+      update: () => builder,
+      set: value => {
+        setCalls.push(value);
+        return builder;
+      },
+      where: (_sql, params) => {
+        Object.assign(where, params);
+        return builder;
+      },
+      andWhere: (_sql, params) => {
+        Object.assign(where, params);
+        return builder;
+      },
+      execute: () => Promise.resolve({ affected: 3 }),
+    };
+    const manager = {
+      getRepository: vi.fn(() => ({ createQueryBuilder: () => builder })),
     };
     const service = new ReservationService(
       {} as never,
       {} as never,
-      availabilityService as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
       {} as never,
       {} as never,
       {} as never,
@@ -271,23 +269,15 @@ describe("ReservationService remaining availability policy", () => {
 
     await service.releaseRemainingAvailabilityForReservation(
       createReservation(),
+      manager as unknown as EntityManager,
     );
 
-    expect(availabilityService.findByRoomAndIsoRange).toHaveBeenCalledWith(
-      "00000000-0000-4000-8000-000000000001",
-      "2026-07-17",
-      "2026-07-19",
-    );
-    expect(availabilityService.update).toHaveBeenCalledTimes(3);
-    expect(availabilityService.update).toHaveBeenNthCalledWith(
-      1,
-      "availability-17",
-      { is_available: true },
-    );
-    expect(availabilityService.update).toHaveBeenNthCalledWith(
-      3,
-      "availability-19",
-      { is_available: true },
-    );
+    expect(setCalls).toEqual([{ is_available: true }]);
+    expect(where).toMatchObject({
+      siteId: SITE_ID,
+      roomId: ROOM_ID,
+      firstNight: "2026-07-17",
+      lastNight: "2026-07-19",
+    });
   });
 });

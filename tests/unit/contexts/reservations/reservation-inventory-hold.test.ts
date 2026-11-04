@@ -42,24 +42,26 @@ describe("isReservationBlockingInventory", () => {
     ).toBe(true);
   });
 
-  it("blocks unpaid pending only before expiration", () => {
+  it("does not block an unpaid pending reservation", () => {
     expect(
       isReservationBlockingInventory(
         {
           status: "pending",
           payment_status: "pending",
+          charge_mode: "immediate",
           expiration_date: "2026-07-25T12:30:00.000Z",
         },
         now,
       ),
-    ).toBe(true);
+    ).toBe(false);
 
     expect(
       isReservationBlockingInventory(
         {
           status: "pending",
           payment_status: "pending",
-          expiration_date: "2026-07-25T11:59:59.000Z",
+          charge_mode: "flexible",
+          expiration_date: "2026-07-25T12:30:00.000Z",
         },
         now,
       ),

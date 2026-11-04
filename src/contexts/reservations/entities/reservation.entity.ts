@@ -7,6 +7,8 @@ import {
   UpdateDateColumn,
 } from "typeorm";
 
+import { decimalTransformer } from "../../payments/entities/decimal.transformer";
+
 export interface ReservationBoardSnapshot {
   code: string;
   name: string;
@@ -32,11 +34,14 @@ export const payment_status_values = [
   "partially_refunded",
 ] as const;
 export type PaymentStatusValue = (typeof payment_status_values)[number];
+export const charge_mode_values = ["immediate", "flexible"] as const;
+export type ChargeModeValue = (typeof charge_mode_values)[number];
 export const payout_status_values = ["held", "released", "blocked"] as const;
 export type PayoutStatusValue = (typeof payout_status_values)[number];
 
 @Entity("reservations")
 @Index("idx_reservations_site_room", ["site_id", "room_id"])
+@Index("idx_reservations_user_checkin", ["user_id", "checkin"])
 export class ReservationEntity {
   @PrimaryGeneratedColumn({ type: "int" })
   id!: number;
@@ -104,6 +109,13 @@ export class ReservationEntity {
   @Column({ type: "enum", enum: payment_status_values })
   payment_status!: PaymentStatusValue;
 
+  /**
+   * When the traveler is charged. `immediate` blocks inventory only after
+   * Stripe confirms. `flexible` is reserved and has no flow yet.
+   */
+  @Column({ type: "enum", enum: charge_mode_values, default: "immediate" })
+  charge_mode!: ChargeModeValue;
+
   @Column({
     type: "enum",
     enum: payout_status_values,
@@ -126,11 +138,19 @@ export class ReservationEntity {
   @Column({ type: "text", nullable: true })
   stripe_refund_id?: string;
 
+  /** Number of refunds WE created; drives the idempotency key refund:{id}:{n}. */
+  @Column({ type: "int", default: 0 })
+  refund_seq!: number;
+
+  /** Amount refunded according to Stripe (charge.amount_refunded / 100). */
+  @Column({ type: "decimal", precision: 10, scale: 2, nullable: true })
+  amount_refunded?: number | null;
+
   @Column({ type: "timestamp", nullable: true })
-  cancelled_at?: Date;
+  cancelled_at?: Date | null;
 
   @Column({ type: "text", nullable: true })
-  cancel_reason?: string;
+  cancel_reason?: string | null;
 
   @Column({ type: "boolean", nullable: true })
   refund_on_cancel?: boolean;
@@ -146,6 +166,40 @@ export class ReservationEntity {
 
   @Column({ type: "timestamp", nullable: true })
   paid_at?: Date;
+
+  // --- F1 economic model (frozen at creation; see payments context) ---------
+  // NOTE: `commission` above is the legacy traveler-side surcharge (always 0,
+  // part of the charged amount). `commission_*` below is the V4P platform fee
+  // retained from the host payout (A2), frozen when the reservation is created.
+
+  /** Platform commission rate frozen at creation (0.1200 = 12 %). */
+  @Column({
+    type: "decimal",
+    precision: 5,
+    scale: 4,
+    nullable: true,
+    transformer: decimalTransformer,
+  })
+  commission_rate?: number | null;
+
+  /** Platform fee in cents frozen at creation (F1: round(rate x total)). */
+  @Column({ type: "int", nullable: true })
+  commission_cents?: number | null;
+
+  /** Amount charged to the traveler, in cents (mirror of `total`). */
+  @Column({ type: "int", nullable: true })
+  total_cents?: number | null;
+
+  @Column({ type: "char", length: 3, nullable: true })
+  currency?: string | null;
+
+  /** Latest reservation_snapshots.version for this reservation. */
+  @Column({ type: "int", nullable: true })
+  snapshot_version?: number | null;
+
+  /** Timezone applicable to deadlines (A6/A10). */
+  @Column({ type: "varchar", length: 64, nullable: true })
+  timezone?: string | null;
 
   @CreateDateColumn()
   created_at!: Date;

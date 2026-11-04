@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { InjectDataSource, InjectRepository } from "@nestjs/typeorm";
-import { DataSource, In, Repository } from "typeorm";
+import { DataSource, EntityManager, In, Repository } from "typeorm";
 
 import { omit_undefined } from "@/shared/utils/omit-undefined";
 
@@ -23,15 +23,31 @@ export class RoomsService {
     private readonly roomExtrasService: RoomExtrasService,
   ) {}
 
-  async create(createDto: CreateRoomDto): Promise<RoomEntity> {
+  /**
+   * Runs `work` inside the caller's transaction when `manager` is given
+   * (e.g. the onboarding wizard, which also updates legacy derived columns),
+   * otherwise opens its own transaction.
+   */
+  private inTransaction<T>(
+    work: (manager: EntityManager) => Promise<T>,
+    manager?: EntityManager,
+  ): Promise<T> {
+    return manager ? work(manager) : this.dataSource.transaction(work);
+  }
+
+  async create(
+    createDto: CreateRoomDto,
+    outerManager?: EntityManager,
+  ): Promise<RoomEntity> {
     const { board_options, extras, ...roomFields } = createDto;
 
-    return this.dataSource.transaction(async manager => {
+    return this.inTransaction(async manager => {
       const room = await manager.save(
         RoomEntity,
         manager.create(RoomEntity, {
           ...roomFields,
           max_pets: roomFields.max_pets ?? 0,
+          bathrooms: roomFields.bathrooms ?? 0,
           is_active: roomFields.is_active ?? true,
           sort_order: roomFields.sort_order ?? 0,
         }),
@@ -49,7 +65,7 @@ export class RoomsService {
       );
 
       return this.findOneWithRelations(room.id, manager);
-    });
+    }, outerManager);
   }
 
   async findBySite(siteId: number): Promise<RoomEntity[]> {
@@ -92,7 +108,11 @@ export class RoomsService {
     return row;
   }
 
-  async update(id: number, updateDto: UpdateRoomDto): Promise<RoomEntity> {
+  async update(
+    id: number,
+    updateDto: UpdateRoomDto,
+    outerManager?: EntityManager,
+  ): Promise<RoomEntity> {
     const { board_options, extras, ...roomFields } = updateDto;
     const payload = omit_undefined(roomFields as Record<string, unknown>);
     for (const imageKey of [
@@ -107,7 +127,7 @@ export class RoomsService {
       }
     }
 
-    return this.dataSource.transaction(async manager => {
+    return this.inTransaction(async manager => {
       const merged = await manager.preload(RoomEntity, {
         id,
         ...payload,
@@ -134,37 +154,44 @@ export class RoomsService {
       }
 
       return this.findOneWithRelations(id, manager);
-    });
+    }, outerManager);
   }
 
-  async remove(id: number): Promise<void> {
-    const room = await this.findOne(id);
+  /**
+   * Deletes the room, or only deactivates it when it has future
+   * pending/confirmed reservations. Returns what actually happened.
+   */
+  async remove(
+    id: number,
+    manager: EntityManager = this.roomsRepository.manager,
+  ): Promise<"deleted" | "deactivated"> {
+    const room = await this.findOneWithRelations(id, manager);
     const todayIso = new Date().toISOString().slice(0, 10);
 
-    const futureReservation = await this.roomsRepository.manager.query<
-      { count: string }[]
-    >(
-      `SELECT COUNT(*)::text AS count FROM reservations
-       WHERE room_id = $1
+    // MariaDB: `?` placeholders; COUNT(*) may come back as string/bigint -> Number()
+    const futureReservation = await manager.query<{ count: string | number }[]>(
+      `SELECT COUNT(*) AS count FROM reservations
+       WHERE room_id = ?
          AND status IN ('pending', 'confirmed')
-         AND checkout > $2`,
+         AND checkout > ?`,
       [id, todayIso],
     );
 
     const count = Number(futureReservation[0]?.count ?? 0);
     if (count > 0) {
-      const deactivated = await this.roomsRepository.preload({
+      const deactivated = await manager.preload(RoomEntity, {
         id: room.id,
         is_active: false,
       });
       if (!deactivated) {
         throw new NotFoundException(`room with id ${id} not found`);
       }
-      await this.roomsRepository.save(deactivated);
-      return;
+      await manager.save(RoomEntity, deactivated);
+      return "deactivated";
     }
 
-    await this.roomsRepository.remove(room);
+    await manager.remove(RoomEntity, room);
+    return "deleted";
   }
 
   async getRoomNameMap(roomIds: number[]): Promise<Map<number, string>> {
@@ -179,7 +206,7 @@ export class RoomsService {
 
   private async findOneWithRelations(
     id: number,
-    manager: DataSource["manager"] = this.roomsRepository.manager,
+    manager: EntityManager = this.roomsRepository.manager,
   ): Promise<RoomEntity> {
     const row = await manager.findOne(RoomEntity, {
       where: { id },

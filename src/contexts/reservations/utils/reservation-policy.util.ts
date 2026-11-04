@@ -11,6 +11,7 @@ export interface ReservationPolicyInput {
 export interface ReservationInventoryHoldInput {
   status: string;
   payment_status: string;
+  charge_mode?: string | null;
   expiration_date?: Date | string | null;
 }
 
@@ -18,14 +19,19 @@ export interface ReservationInventoryHoldInput {
  * Whether a reservation still blocks inventory / calendar dates.
  * - confirmed / finalized: always
  * - paid (any non-cancelled flow): always, expiration ignored
- * - pending unpaid: only while expiration_date is in the future
+ * - pending unpaid: never (immediate checkout does not hold nights;
+ *   `flexible` is reserved and does not hold either)
+ * - cancelled: never
  */
 export function isReservationBlockingInventory(
   reservation: ReservationInventoryHoldInput,
   now: Date = new Date(),
 ): boolean {
+  void now;
   const status = String(reservation.status || "").toLowerCase();
   const paymentStatus = String(reservation.payment_status || "").toLowerCase();
+  // Clock stays in the signature for a future flexible hold. Unused today.
+  void now;
 
   if (status === "cancelled") {
     return false;
@@ -39,26 +45,15 @@ export function isReservationBlockingInventory(
     return true;
   }
 
-  if (status !== "pending") {
-    return false;
-  }
-
-  if (!reservation.expiration_date) {
-    return true;
-  }
-
-  const expiresAt = new Date(reservation.expiration_date);
-  if (Number.isNaN(expiresAt.getTime())) {
-    return true;
-  }
-
-  return expiresAt.getTime() > now.getTime();
+  return false;
 }
 
 export interface ReservationPolicyCapabilities {
   can_cancel: boolean;
   can_refund: boolean;
   can_finalize: boolean;
+  /** Punto 6: host may report "No se presentó" (from check-in, payout not blocked). */
+  can_report_no_show: boolean;
   refund_deadline: string;
 }
 
@@ -104,6 +99,7 @@ export function computeReservationPolicyCapabilities(
       can_cancel: false,
       can_refund: false,
       can_finalize: false,
+      can_report_no_show: false,
       refund_deadline: refundDeadlineIso,
     };
   }
@@ -113,6 +109,7 @@ export function computeReservationPolicyCapabilities(
       can_cancel: !payoutBlocked,
       can_refund: false,
       can_finalize: false,
+      can_report_no_show: false,
       refund_deadline: refundDeadlineIso,
     };
   }
@@ -131,6 +128,11 @@ export function computeReservationPolicyCapabilities(
         !payoutBlocked &&
         nowMs <= refundDeadline.getTime(),
       can_finalize: isPaid && !payoutBlocked && fromCheckin,
+      can_report_no_show:
+        (isPaid || reservation.payment_status === "partially_refunded") &&
+        !payoutBlocked &&
+        !payoutReleased &&
+        fromCheckin,
       refund_deadline: refundDeadlineIso,
     };
   }
@@ -139,6 +141,81 @@ export function computeReservationPolicyCapabilities(
     can_cancel: false,
     can_refund: false,
     can_finalize: false,
+    can_report_no_show: false,
     refund_deadline: refundDeadlineIso,
   };
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Nights between two ISO dates using pure UTC math. Local-time parsing
+ * (`new Date("YYYY-MM-DDT00:00:00")`) loses/gains one hour across DST
+ * transitions, so a 2-night stay over the spring-forward weekend computed
+ * as 47h / 24h = 1 night.
+ */
+export function calcNightsUtc(checkin: string, checkout: string): number {
+  const start = parseIsoDateAtUtcMidnight(checkin).getTime();
+  const end = parseIsoDateAtUtcMidnight(checkout).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return 0;
+  }
+  return Math.round((end - start) / DAY_MS);
+}
+
+/** Night dates (YYYY-MM-DD) in [checkin, checkout), generated with UTC math (DST-safe). */
+export function getNightDatesUtc(checkin: string, checkout: string): string[] {
+  const dates: string[] = [];
+  const startMs = parseIsoDateAtUtcMidnight(checkin).getTime();
+  const endMs = parseIsoDateAtUtcMidnight(checkout).getTime();
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) {
+    return dates;
+  }
+  for (let ms = startMs; ms < endMs; ms += DAY_MS) {
+    dates.push(formatUtcIsoDate(new Date(ms)));
+  }
+  return dates;
+}
+
+/** Stripe rejects Checkout Sessions whose `expires_at` is < 30 min from creation. */
+export const STRIPE_CHECKOUT_MIN_EXPIRY_MS = 30 * 60 * 1000;
+/** Stripe rejects Checkout Sessions whose `expires_at` is > 24 h from creation. */
+export const STRIPE_CHECKOUT_MAX_EXPIRY_MS = 24 * 60 * 60 * 1000;
+/** Safety margin so the session request does not fall under the 30 min minimum in transit. */
+export const STRIPE_CHECKOUT_EXPIRY_MARGIN_MS = 60 * 1000;
+
+/**
+ * Pending-reservation TTL, single source of truth for BOTH the reservation
+ * `expiration_date` and the Stripe Checkout Session `expires_at`.
+ * Clamped to Stripe's accepted window.
+ */
+export function resolvePendingTtlMs(configuredMs: number): number {
+  const min = STRIPE_CHECKOUT_MIN_EXPIRY_MS + STRIPE_CHECKOUT_EXPIRY_MARGIN_MS;
+  if (!Number.isFinite(configuredMs) || configuredMs < min) {
+    return min;
+  }
+  return Math.min(configuredMs, STRIPE_CHECKOUT_MAX_EXPIRY_MS);
+}
+
+/**
+ * Checkout Session `expires_at` (unix seconds) aligned with the reservation
+ * expiration. If the reservation expiry is already too close (slow request),
+ * it is pushed to the minimum Stripe accepts; the caller must then persist
+ * the returned date back on the reservation so both stay aligned.
+ */
+export function resolveCheckoutExpiry(
+  reservationExpiration: Date,
+  now: Date = new Date(),
+): { expiresAtUnix: number; expirationDate: Date } {
+  const minMs =
+    now.getTime() +
+    STRIPE_CHECKOUT_MIN_EXPIRY_MS +
+    STRIPE_CHECKOUT_EXPIRY_MARGIN_MS;
+  const maxMs = now.getTime() + STRIPE_CHECKOUT_MAX_EXPIRY_MS;
+  const targetMs = Math.min(
+    Math.max(reservationExpiration.getTime(), minMs),
+    maxMs,
+  );
+  const expiresAtUnix = Math.ceil(targetMs / 1000);
+  return { expiresAtUnix, expirationDate: new Date(expiresAtUnix * 1000) };
 }

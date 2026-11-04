@@ -12,19 +12,23 @@ import {
   Patch,
   Post,
   Query,
+  UseGuards,
 } from "@nestjs/common";
 
 import { BlocksEntity } from "@/contexts/blocks/entities/blocks.entity";
 
 import { DateRangeQueryDto } from "../../shared/dto/date-range-query.dto";
+import { InternalApiKeyGuard } from "../../shared/guards/internal-api-key.guard";
 import { CreateBlocksDto } from "../dto/create-blocks.dto";
 import { UpdateBlocksDto } from "../dto/update-blocks.dto";
 import { BlocksService } from "../services/blocks.service";
 
+/** Host/internal only (F0): reached via web/php/booking_host_api.php. */
 @Controller({
   path: "blocks",
   version: "1",
 })
+@UseGuards(InternalApiKeyGuard)
 export class BlocksController {
   constructor(private readonly blocks_service: BlocksService) {}
 

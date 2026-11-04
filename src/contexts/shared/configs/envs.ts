@@ -4,7 +4,6 @@ import { z } from "zod";
 config();
 const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
-  DATABASE_URL: z.url(),
   NODE_ENV: z
     .enum(["development", "production", "test"])
     .default("development"),
@@ -13,17 +12,32 @@ const envSchema = z.object({
   DB_USERNAME: z.string(),
   DB_PASSWORD: z.string(),
   DB_DATABASE: z.string(),
+  // Legacy fallback only (F1): new reservations freeze commission_rate from
+  // platform_settings.commission_rate; this is used for rows without it.
   COMMISSION_PERCENTAGE: z.coerce.number().default(0.1),
+  // platform_settings in-memory cache TTL (ms). 0 disables caching.
+  PLATFORM_SETTINGS_CACHE_TTL_MS: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .default(60_000),
   CURRENCY: z.string().default("EUR"),
-  // 15 minutes
+  // Pending reservation TTL (ms). Single source for reservation.expiration_date
+  // AND Stripe Checkout Session expires_at. Stripe requires >= 30 min, so the
+  // effective value is clamped by resolvePendingTtlMs() (min 31 min, max 24 h).
   PENDING_RESERVATION_EXPIRATION_TIME: z.coerce
     .number()
-    .default(1000 * 60 * 15),
+    .default(1000 * 60 * 31),
   DB_PREFIX: z.string().default("v4p_j"),
   STRIPE_API_KEY: z.string(),
   STRIPE_WEBHOOK_SECRET: z.string(),
+  // Connect endpoint secret (host account events: payout.failed/paid, account.updated).
+  STRIPE_CONNECT_WEBHOOK_SECRET: z.string().optional(),
   FRONTEND_URL: z.url().default("http://localhost:3000"),
   BOOKING_WEB_URL: z.url().optional(),
+  // Base URL of the admino backoffice for links in emails (incident chat).
+  // Default: (BOOKING_WEB_URL ?? FRONTEND_URL) + "/admino".
+  BOOKING_ADMIN_URL: z.url().optional(),
   BOOKING_EMAIL_TOKEN: z.string().optional(),
   FEEDBACK_PAYOUT_DELAY_HOURS: z.coerce.number().default(24),
   BOOKING_DEV_EMAIL: z.string().email().default("idairreyes@gmail.com"),
@@ -40,9 +54,12 @@ const envSchema = z.object({
   SMTP_FROM: z.email(),
   SMTP_FROM_NAME: z.string(),
   SMTP_REPLY_TO: z.email(),
+  SMTP_HELO: z.string().optional(),
   REDIS_HOST: z.string().default("localhost"),
   REDIS_PORT: z.coerce.number().default(6379),
   MAIL_QUEUE_NAME: z.string().default("mail-send"),
+  // Shared secret for server-to-server calls (PHP web -> booking), header X-Internal-Key
+  INTERNAL_API_KEY: z.string().min(32),
 });
 
 export const envs = envSchema.parse(process.env);

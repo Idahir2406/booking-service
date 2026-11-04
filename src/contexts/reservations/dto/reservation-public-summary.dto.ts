@@ -3,18 +3,17 @@ import type {
   StatusValue,
 } from "../entities/reservation.entity";
 
+/**
+ * Traveler-facing summary for the post-checkout success page. Only returned
+ * when the caller proves possession of the Stripe Checkout Session id
+ * (?session_id=cs_...), and without guest PII or host/payout data (F0).
+ */
 export class ReservationPublicSummaryDto {
   id!: number;
   code!: string;
-  site_id!: number;
   status!: StatusValue;
   payment_status!: PaymentStatusValue;
   checkin!: string;
   checkout!: string;
-  guests!: number;
-  pets!: number;
-  subtotal!: number | null;
-  commission!: number | null;
   total!: number | null;
-  guest_name!: string | null;
 }

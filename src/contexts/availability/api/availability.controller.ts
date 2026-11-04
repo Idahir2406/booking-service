@@ -10,19 +10,26 @@ import {
   Patch,
   Post,
   Query,
+  UseGuards,
 } from "@nestjs/common";
 
 import { AvailabilityEntity } from "@/contexts/availability/entities/availability.entity";
 
 import { DateRangeQueryDto } from "../../shared/dto/date-range-query.dto";
+import { InternalApiKeyGuard } from "../../shared/guards/internal-api-key.guard";
 import { CreateAvailabilityDto } from "../dto/create-availability.dto";
 import { UpdateAvailabilityDto } from "../dto/update-availability.dto";
 import { AvailabilityService } from "../services/availability.service";
 
+/**
+ * Host/internal only (F0). Travelers read occupancy through the public
+ * GET /v1/reservations/public/rooms/:room_id/calendar (no guest data).
+ */
 @Controller({
   path: "availability",
   version: "1",
 })
+@UseGuards(InternalApiKeyGuard)
 export class AvailabilityController {
   constructor(private readonly availability_service: AvailabilityService) {}
 

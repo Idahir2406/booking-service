@@ -60,6 +60,16 @@
       "key": "board_option_id",
       "value": "",
       "type": "string"
+    },
+    {
+      "key": "internal_api_key",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "province_id",
+      "value": "1",
+      "type": "string"
     }
   ],
   "item": [
@@ -139,11 +149,20 @@
           ],
           "request": {
             "method": "POST",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"site_id\": {{site_id}},\n  \"name\": \"Habitación doble\",\n  \"price_per_night\": 85,\n  \"max_guests\": 2,\n  \"max_pets\": 1,\n  \"is_active\": true,\n  \"board_options\": [\n    {\n      \"code\": \"room_only\",\n      \"description\": \"Tarifa base sin comidas\",\n      \"price\": 0,\n      \"is_included\": true,\n      \"is_default\": true,\n      \"is_active\": true,\n      \"sort_order\": 0\n    },\n    {\n      \"code\": \"breakfast_included\",\n      \"description\": \"Desayuno buffet\",\n      \"price\": 8,\n      \"is_included\": false,\n      \"is_default\": false,\n      \"is_active\": true,\n      \"sort_order\": 1\n    }\n  ],\n  \"extras\": [\n    {\n      \"name\": \"Parking cubierto\",\n      \"pricing_mode\": \"per_night\",\n      \"price\": 12,\n      \"is_active\": true,\n      \"sort_order\": 0\n    }\n  ]\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/v1/rooms",
@@ -157,11 +176,20 @@
           "name": "Update room",
           "request": {
             "method": "PATCH",
-            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"name\": \"Habitación doble actualizada\",\n  \"price_per_night\": 90,\n  \"board_options\": [\n    {\n      \"code\": \"room_only\",\n      \"description\": \"Tarifa base sin comidas\",\n      \"price\": 0,\n      \"is_included\": true,\n      \"is_default\": true,\n      \"is_active\": true,\n      \"sort_order\": 0\n    },\n    {\n      \"code\": \"breakfast_included\",\n      \"description\": \"Desayuno buffet\",\n      \"price\": 10,\n      \"is_included\": false,\n      \"is_default\": false,\n      \"is_active\": true,\n      \"sort_order\": 1\n    }\n  ],\n  \"extras\": [\n    {\n      \"name\": \"Parking cubierto\",\n      \"pricing_mode\": \"per_night\",\n      \"price\": 15,\n      \"is_active\": true,\n      \"sort_order\": 0\n    }\n  ]\n}",
-              "options": { "raw": { "language": "json" } }
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
             },
             "url": {
               "raw": "{{base_url}}/v1/rooms/{{room_id}}",
@@ -181,8 +209,14 @@
               "host": ["{{base_url}}"],
               "path": ["v1", "availability", "by-room", "{{room_id}}", "range"],
               "query": [
-                { "key": "from", "value": "{{range_from}}" },
-                { "key": "to", "value": "{{range_to}}" }
+                {
+                  "key": "from",
+                  "value": "{{range_from}}"
+                },
+                {
+                  "key": "to",
+                  "value": "{{range_to}}"
+                }
               ]
             }
           },
@@ -198,8 +232,14 @@
               "host": ["{{base_url}}"],
               "path": ["v1", "blocks", "by-room", "{{room_id}}", "range"],
               "query": [
-                { "key": "from", "value": "{{range_from}}" },
-                { "key": "to", "value": "{{range_to}}" }
+                {
+                  "key": "from",
+                  "value": "{{range_from}}"
+                },
+                {
+                  "key": "to",
+                  "value": "{{range_to}}"
+                }
               ]
             }
           },
@@ -956,6 +996,155 @@
         }
       ],
       "description": "Webhook `/v1/webhook`"
+    },
+    {
+      "name": "Site wizard (internal)",
+      "description": "Onboarding wizard paso 1. Requiere header `X-Internal-Key` = `INTERNAL_API_KEY` del `.env` (variable de entorno `internal_api_key`). 401 sin la key.",
+      "item": [
+        {
+          "name": "Site form catalogs",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Internal-Key",
+                "value": "{{internal_api_key}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/catalogs/site-form?lang=es",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "catalogs", "site-form"],
+              "query": [
+                {
+                  "key": "lang",
+                  "value": "es"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Provinces",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Internal-Key",
+                "value": "{{internal_api_key}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/geo/provinces?q=&limit=20&offset=0",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "geo", "provinces"],
+              "query": [
+                {
+                  "key": "q",
+                  "value": ""
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Towns by province",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Internal-Key",
+                "value": "{{internal_api_key}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/geo/provinces/{{province_id}}/towns?q=&limit=20&offset=0",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "geo", "provinces", "{{province_id}}", "towns"],
+              "query": [
+                {
+                  "key": "q",
+                  "value": ""
+                },
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get wizard state",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Internal-Key",
+                "value": "{{internal_api_key}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/v1/wizard/sites/{{site_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "wizard", "sites", "{{site_id}}"]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Save step 1 (property)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "X-Internal-Key",
+                "value": "{{internal_api_key}}",
+                "type": "text"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json",
+                "type": "text"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"main_tipsite_id\": 2,\n  \"tipsite\": [\n    2,\n    9\n  ],\n  \"tipo_de_alquiler\": 1,\n  \"name\": \"Casa Rural Ejemplo\",\n  \"email\": \"reservas@example.com\",\n  \"email2\": \"\",\n  \"telefono\": \"+34 612 345 678\",\n  \"whatsapp_prefix\": \"+34\",\n  \"whatsapp_number\": \"612345678\",\n  \"id_provincia\": 1,\n  \"id_poblacion\": 2,\n  \"geolat\": null,\n  \"geolng\": null,\n  \"interes\": \"Costa da Morte\",\n  \"distancia\": \"\",\n  \"ubicacion\": \"\",\n  \"tipenv\": 2,\n  \"tipdest\": [\n    2\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/v1/wizard/sites/{{site_id}}/property",
+              "host": ["{{base_url}}"],
+              "path": ["v1", "wizard", "sites", "{{site_id}}", "property"]
+            }
+          },
+          "response": []
+        }
+      ]
     }
   ]
 }

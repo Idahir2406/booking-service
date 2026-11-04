@@ -1,6 +1,13 @@
 import type {
   BuiltReservationEmail,
+  HostNoticeEmailPayload,
+  HostNoticeEmailType,
+  IncidentMessageEmailPayload,
+  IncidentMessageEmailType,
+  ReservationEmailDeposit,
+  ReservationEmailDog,
   ReservationEmailPayload,
+  ReservationEmailPriceLine,
   ReservationEmailType,
 } from "../types/reservation-email.types";
 
@@ -9,6 +16,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { Site } from "@/src/types/site.types";
 
 import { MailQueueService } from "../../mail/mail-queue.service";
+import { ReservationEconomicsService } from "../../payments/services/reservation-economics.service";
 import { envs } from "../../shared/configs/envs";
 import { ReservationEntity } from "../entities/reservation.entity";
 import { ReservationGuestFeedbackEntity } from "../entities/reservation-guest-feedback.entity";
@@ -23,7 +31,63 @@ export class ReservationEmailService {
   constructor(
     private readonly mailQueueService: MailQueueService,
     private readonly templateService: ReservationEmailTemplateService,
+    private readonly economics: ReservationEconomicsService,
   ) {}
+
+  /**
+   * F2: line breakdown + deposit + dogs for the confirmation emails, read
+   * from the immutable snapshot (what the traveler accepted). Never throws:
+   * a missing/legacy snapshot just means the classic email.
+   */
+  private async confirmationDetails(
+    reservationId: number,
+  ): Promise<Record<string, unknown>> {
+    try {
+      const snapshot = await this.economics.findLatestSnapshot(reservationId);
+      const payload = snapshot?.payload ?? null;
+      if (!payload || !Array.isArray(payload.price_lines)) {
+        return {};
+      }
+      const lines = (payload.price_lines as Record<string, unknown>[]).map(
+        (line): ReservationEmailPriceLine => {
+          const metadata = (line.metadata ?? {}) as Record<string, unknown>;
+          return {
+            description: String(line.description ?? ""),
+            detail:
+              typeof metadata.detail === "string" ? metadata.detail : null,
+            amount_cents: Number(line.amount_cents ?? 0),
+            is_optional: Boolean(line.is_optional),
+          };
+        },
+      );
+      const deposit = (payload.deposit ??
+        null) as ReservationEmailDeposit | null;
+      const dogs = Array.isArray(payload.dogs)
+        ? (payload.dogs as Record<string, unknown>[]).map(
+            (dog): ReservationEmailDog => ({
+              name: typeof dog.name === "string" ? dog.name : null,
+              weight_kg: Number(dog.weight_kg ?? 0),
+              size:
+                typeof dog.size === "object" && dog.size !== null
+                  ? String((dog.size as { name?: unknown }).name ?? "")
+                  : null,
+              is_ppp: Boolean(dog.is_ppp),
+            }),
+          )
+        : [];
+      return {
+        price_lines: lines,
+        total_cents: Number(payload.total_cents ?? 0),
+        deposit,
+        dogs,
+      };
+    } catch (error) {
+      this.logger.warn(
+        `Confirmation breakdown unavailable for reservation ${reservationId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return {};
+    }
+  }
 
   private reservationPayload(
     reservation: ReservationEntity,
@@ -39,7 +103,7 @@ export class ReservationEmailService {
       checkout: reservation.checkout,
       guests: reservation.guests,
       pets: reservation.pets,
-      total: Number(reservation.total ?? 0),
+      total: Number(reservation.total),
       site_id: reservation.site_id,
       site_name: site.name ?? "Alojamiento",
       host_email: site.email ?? "",
@@ -51,6 +115,7 @@ export class ReservationEmailService {
     to: string;
     subject: string;
     html: string;
+    text?: string;
   } {
     const intendedEmail = built.to;
     if (envs.NODE_ENV === "production") {
@@ -58,6 +123,7 @@ export class ReservationEmailService {
         to: intendedEmail,
         subject: built.subject,
         html: built.html,
+        ...(built.text ? { text: built.text } : {}),
       };
     }
 
@@ -66,7 +132,63 @@ export class ReservationEmailService {
       to: envs.BOOKING_DEV_EMAIL,
       subject: `[DEV ${built.roleLabel} → ${intendedEmail}] ${built.subject}`,
       html: devBanner + built.html,
+      ...(built.text
+        ? { text: `Destinatario real: ${intendedEmail}\n\n${built.text}` }
+        : {}),
     };
+  }
+
+  /**
+   * Incident chat (2026-10-25): one email for one recipient (admin or
+   * traveler). Never throws; returns false when nothing was queued so the
+   * caller can log it.
+   */
+  async sendIncidentMessageEmail(
+    emailType: IncidentMessageEmailType,
+    payload: IncidentMessageEmailPayload,
+  ): Promise<boolean> {
+    try {
+      const built = this.templateService.buildIncidentMessage(
+        emailType,
+        payload,
+      );
+      if (!built) {
+        return false;
+      }
+      const result = await this.mailQueueService.enqueue(
+        this.resolveRecipient(built),
+      );
+      return result.queued;
+    } catch (error) {
+      this.logger.error(
+        `Failed to send email ${emailType} for incident ${payload.incident_id}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      return false;
+    }
+  }
+
+  /** Punto 9: host-level notice (bank payout failed / reservations paused). Never throws. */
+  async sendHostNoticeEmail(
+    emailType: HostNoticeEmailType,
+    payload: HostNoticeEmailPayload,
+  ): Promise<boolean> {
+    try {
+      const built = this.templateService.buildHostNotice(emailType, payload);
+      if (!built) {
+        return false;
+      }
+      const result = await this.mailQueueService.enqueue(
+        this.resolveRecipient(built),
+      );
+      return result.queued;
+    } catch (error) {
+      this.logger.error(
+        `Failed to send email ${emailType} for host user ${payload.host_user_id}`,
+        error instanceof Error ? error.stack : String(error),
+      );
+      return false;
+    }
   }
 
   async sendReservationEmail(
@@ -103,15 +225,18 @@ export class ReservationEmailService {
     reservation: ReservationEntity,
     site: Site,
   ): Promise<void> {
+    const details = await this.confirmationDetails(reservation.id);
     await this.sendReservationEmail(
       "payment_confirmed_guest",
       reservation,
       site,
+      details,
     );
     await this.sendReservationEmail(
       "payment_confirmed_host",
       reservation,
       site,
+      details,
     );
   }
 
@@ -243,6 +368,101 @@ export class ReservationEmailService {
       site,
     );
     await this.sendReservationEmail("refund_processed_host", reservation, site);
+  }
+
+  async sendRefundFailedEmails(
+    reservation: ReservationEntity,
+    site: Site,
+    failureReason: string,
+  ): Promise<void> {
+    await this.sendReservationEmail("refund_failed_guest", reservation, site, {
+      error_message: failureReason,
+    });
+    await this.sendReservationEmail("refund_failed_host", reservation, site, {
+      error_message: failureReason,
+    });
+    await this.sendReservationEmail("refund_failed_admin", reservation, site, {
+      error_message: failureReason,
+      admin_email: envs.BOOKING_ADMIN_EMAIL,
+    });
+  }
+
+  async sendForceMajeureReviewAdminEmail(
+    reservation: ReservationEntity,
+    site: Site,
+    reason: string,
+    notes?: string,
+  ): Promise<void> {
+    await this.sendReservationEmail(
+      "force_majeure_review_admin",
+      reservation,
+      site,
+      {
+        cancel_reason: reason,
+        comment: notes ?? "",
+        admin_email: envs.BOOKING_ADMIN_EMAIL,
+      },
+    );
+  }
+
+  /**
+   * F-PV7a: a traveler opened an incident. `payoutBlocked` reuses the
+   * payload `refund` flag only to pick the subject line.
+   */
+  async sendIncidentAdminEmail(
+    reservation: ReservationEntity,
+    site: Site,
+    incidentType: string,
+    description: string,
+    payoutBlocked: boolean,
+  ): Promise<void> {
+    await this.sendReservationEmail(
+      "incident_opened_admin",
+      reservation,
+      site,
+      {
+        report_reason: incidentType,
+        comment: description,
+        refund: payoutBlocked,
+        admin_email: envs.BOOKING_ADMIN_EMAIL,
+      },
+    );
+  }
+
+  async sendExceptionalRefundReviewAdminEmail(
+    reservation: ReservationEntity,
+    site: Site,
+    amountCents: number,
+    reason: string,
+  ): Promise<void> {
+    await this.sendReservationEmail(
+      "exceptional_refund_review_admin",
+      reservation,
+      site,
+      {
+        cancel_reason: reason,
+        total_cents: amountCents,
+        admin_email: envs.BOOKING_ADMIN_EMAIL,
+      },
+    );
+  }
+
+  /** Payment arrived for an expired/cancelled reservation whose dates are gone: full refund. */
+  async sendPaymentAfterExpiryRefundEmails(
+    reservation: ReservationEntity,
+    site: Site,
+  ): Promise<void> {
+    await this.sendReservationEmail(
+      "payment_after_expiry_refund_guest",
+      reservation,
+      site,
+    );
+    await this.sendReservationEmail(
+      "payment_after_expiry_refund_admin",
+      reservation,
+      site,
+      { admin_email: envs.BOOKING_ADMIN_EMAIL },
+    );
   }
 
   async sendStripeDisputeEmails(

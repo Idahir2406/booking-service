@@ -22,9 +22,16 @@ export class CreateRoomDto {
   @IsString()
   name!: string;
 
+  // Unit type (site_units catalog)
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  site_unit_id?: number | null;
+
   @IsOptional()
   @IsString()
-  description?: string;
+  description?: string | null;
 
   @Type(() => Number)
   @IsNumber()
@@ -41,6 +48,12 @@ export class CreateRoomDto {
   @IsInt()
   @Min(0)
   max_pets?: number;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  bathrooms?: number;
 
   @IsOptional()
   @IsBoolean()

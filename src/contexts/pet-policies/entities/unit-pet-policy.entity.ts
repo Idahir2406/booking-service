@@ -51,17 +51,15 @@ export class UnitPetPolicyEntity {
   @JoinColumn({ name: "species_id" })
   species!: SpeciesEntity;
 
-  // Max size category admitted (cumulative by rank); null = sin límite de tamaño
+  // Max size category admitted (cumulative by rank); null = no contestado.
+  // "Sin límite de peso" = the top-rank size (Extra grande, max_kg NULL).
+  // Max number of dogs is site-level: site_settings.max_pets (-> rooms.max_pets)
   @Column({ type: "int", nullable: true })
   max_size_id!: number | null;
 
   @ManyToOne("DogSizeEntity", { onDelete: "RESTRICT", nullable: true })
   @JoinColumn({ name: "max_size_id" })
   max_size!: DogSizeEntity | null;
-
-  // null = sin límite
-  @Column({ type: "smallint", nullable: true })
-  max_pets!: number | null;
 
   @Column({ type: "boolean", nullable: true })
   ppp_allowed!: boolean | null;

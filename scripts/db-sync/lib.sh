@@ -1,14 +1,8 @@
 #!/usr/bin/env bash
 # Librería compartida para sincronizar Postgres LOCAL ↔ PRODUCCIÓN (booking).
 #
-# Carga de variables (prioridad de menor a mayor):
-#   1) .env del proyecto (POSTGRES_*, DATABASE_MIGRATIONS_URL)
-#   2) scripts/db-sync/db-sync.env (overrides explícitos LOCAL_* / PROD_*)
-#
-# LOCAL por defecto = Postgres de docker-compose expuesto en el host:
-#   host=localhost  port=$POSTGRES_PORT  user/db/pass = POSTGRES_*
-#
-# PROD por defecto = se parsea de DATABASE_MIGRATIONS_URL si no hay PROD_*.
+# Credenciales solo en scripts/db-sync/db-sync.env (LOCAL_* / PROD_*).
+# La app Nest usa DB_* de .env (MariaDB) y no lee estas variables.
 
 set -euo pipefail
 
@@ -50,82 +44,15 @@ load_env_file() {
   done < "$file"
 }
 
-# Parsea postgresql://user:pass@host:port/db → variables con prefijo $1_
-parse_postgres_url() {
-  local prefix="$1"
-  local url="$2"
-
-  if [[ -z "$url" ]]; then
-    return 0
-  fi
-
-  # Quitar esquema
-  local rest="${url#postgresql://}"
-  rest="${rest#postgres://}"
-
-  local userinfo hostport db
-  userinfo="${rest%%@*}"
-  hostport_and_db="${rest#*@}"
-  hostport="${hostport_and_db%%/*}"
-  db="${hostport_and_db#*/}"
-  db="${db%%\?*}"
-
-  local user pass host port
-  if [[ "$userinfo" == *":"* ]]; then
-    user="${userinfo%%:*}"
-    pass="${userinfo#*:}"
-    # URL-decode solo si hay %XX (evita alterar passwords literales)
-    if [[ "$pass" == *"%"* ]]; then
-      pass="$(printf '%b' "${pass//%/\\x}")"
-    fi
-  else
-    user="$userinfo"
-    pass=""
-  fi
-
-  if [[ "$hostport" == *":"* ]]; then
-    host="${hostport%%:*}"
-    port="${hostport#*:}"
-  else
-    host="$hostport"
-    port="5432"
-  fi
-
-  # Solo setear si no existen aún
-  local var
-  for var in USER PASSWORD HOST PORT DB; do
-    local full="${prefix}_${var}"
-    local val
-    case "$var" in
-      USER) val="$user" ;;
-      PASSWORD) val="$pass" ;;
-      HOST) val="$host" ;;
-      PORT) val="$port" ;;
-      DB) val="$db" ;;
-    esac
-    if [[ -z "${!full+x}" || -z "${!full}" ]]; then
-      export "$full=$val"
-    fi
-  done
-}
-
 resolve_connection_vars() {
   load_env_file "$PROJECT_ROOT/.env"
   load_env_file "$SCRIPT_DIR/db-sync.env"
 
-  # --- LOCAL: mapeo desde POSTGRES_* del docker-compose ---
   export LOCAL_HOST="${LOCAL_HOST:-localhost}"
-  export LOCAL_PORT="${LOCAL_PORT:-${POSTGRES_PORT:-5434}}"
-  export LOCAL_USER="${LOCAL_USER:-${POSTGRES_USER:-postgres}}"
-  export LOCAL_PASSWORD="${LOCAL_PASSWORD:-${POSTGRES_PASSWORD:-}}"
-  export LOCAL_DB="${LOCAL_DB:-${POSTGRES_DB:-booking}}"
-
-  # --- PROD: preferir PROD_* de db-sync.env; si faltan, parsear DATABASE_MIGRATIONS_URL ---
-  if [[ -z "${PROD_HOST:-}" || -z "${PROD_USER:-}" || -z "${PROD_DB:-}" ]]; then
-    if [[ -n "${DATABASE_MIGRATIONS_URL:-}" ]]; then
-      parse_postgres_url "PROD" "$DATABASE_MIGRATIONS_URL"
-    fi
-  fi
+  export LOCAL_PORT="${LOCAL_PORT:-5434}"
+  export LOCAL_USER="${LOCAL_USER:-postgres}"
+  export LOCAL_PASSWORD="${LOCAL_PASSWORD:-}"
+  export LOCAL_DB="${LOCAL_DB:-booking}"
 
   export PROD_HOST="${PROD_HOST:-}"
   export PROD_PORT="${PROD_PORT:-5432}"
@@ -135,8 +62,8 @@ resolve_connection_vars() {
 
   # Validaciones mínimas
   local missing=()
-  [[ -z "$LOCAL_PASSWORD" ]] && missing+=("LOCAL_PASSWORD / POSTGRES_PASSWORD")
-  [[ -z "$PROD_HOST" ]] && missing+=("PROD_HOST (o DATABASE_MIGRATIONS_URL)")
+  [[ -z "$LOCAL_PASSWORD" ]] && missing+=("LOCAL_PASSWORD")
+  [[ -z "$PROD_HOST" ]] && missing+=("PROD_HOST")
   [[ -z "$PROD_USER" ]] && missing+=("PROD_USER")
   [[ -z "$PROD_PASSWORD" ]] && missing+=("PROD_PASSWORD")
   [[ -z "$PROD_DB" ]] && missing+=("PROD_DB")
@@ -145,8 +72,7 @@ resolve_connection_vars() {
     echo "❌ Faltan variables de conexión:" >&2
     printf '   - %s\n' "${missing[@]}" >&2
     echo "" >&2
-    echo "Copia scripts/db-sync/db-sync.env.example → db-sync.env" >&2
-    echo "o define DATABASE_MIGRATIONS_URL / POSTGRES_* en el .env del proyecto." >&2
+    echo "Copia scripts/db-sync/db-sync.env.example → db-sync.env y completa LOCAL_* / PROD_*." >&2
     exit 1
   fi
 }

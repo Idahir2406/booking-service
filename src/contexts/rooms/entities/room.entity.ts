@@ -36,7 +36,7 @@ export class RoomEntity {
   name!: string;
 
   @Column({ type: "text", nullable: true })
-  description?: string;
+  description?: string | null;
 
   @Column({ type: "decimal", precision: 10, scale: 2 })
   price_per_night!: number;
@@ -46,6 +46,9 @@ export class RoomEntity {
 
   @Column({ type: "int", default: 0 })
   max_pets!: number;
+
+  @Column({ type: "smallint", default: 0 })
+  bathrooms!: number;
 
   @Column({ type: "boolean", default: true })
   is_active!: boolean;

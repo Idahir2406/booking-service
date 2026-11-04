@@ -5,8 +5,7 @@
 #   ./scripts/db-sync/local-to-production.sh
 #
 # Variables:
-#   LOCAL  ← .env (POSTGRES_*) o db-sync.env (LOCAL_*)
-#   PROD   ← .env (DATABASE_MIGRATIONS_URL) o db-sync.env (PROD_*)
+#   LOCAL / PROD ← scripts/db-sync/db-sync.env (LOCAL_* / PROD_*)
 #
 # Flags vía env:
 #   SKIP_CONFIRM=1  no pide confirmación
