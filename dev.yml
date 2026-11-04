@@ -6,13 +6,6 @@ services:
     depends_on:
       - redis
     environment:
-      # MariaDB de viajes4patas/web. Misma red Docker: web_default.
-      # Usuario y contraseña salen de booking/.env. El host se fuerza a v4p-db:3306.
-      DB_HOST: v4p-db
-      DB_PORT: 3306
-      DB_USERNAME: ${DB_USERNAME}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_DATABASE: ${DB_DATABASE}
       REDIS_HOST: redis
       REDIS_PORT: 6379
     extra_hosts:
