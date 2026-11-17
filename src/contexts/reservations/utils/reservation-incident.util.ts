@@ -19,6 +19,13 @@ export const INCIDENT_TYPE = {
   FORCE_MAJEURE_CANCELLATION: "force_majeure_cancellation",
   /** Opened by the HOST ("No se presentó"), resolved by V4P (punto 6). */
   NO_SHOW: "no_show",
+  /**
+   * Opened by the HOST ("Comunicar imposibilidad de alojar", 2026-11-15).
+   * Never cancels by itself: payout blocked, V4P reviews and either cancels
+   * with a 100 % refund (responsible: host) or rejects (stay goes on).
+   * Hidden from the traveler while open (V4P contacts the traveler).
+   */
+  HOST_CANNOT_HOST: "host_cannot_host",
   OTHER: "other",
 } as const;
 
@@ -70,6 +77,26 @@ export const OPEN_INCIDENT_STATUSES: readonly IncidentStatus[] = [
   INCIDENT_STATUS.IN_REVIEW,
   INCIDENT_STATUS.NEEDS_INFO,
 ];
+
+/**
+ * Incidents of these types are internal (host <-> V4P) while V4P reviews
+ * them (status in_review): the traveler does not see them. To involve the
+ * traveler, V4P moves the incident to needs_info (its note is emailed and the
+ * incident becomes visible); the resolution always notifies the traveler.
+ */
+export const TRAVELER_HIDDEN_IN_REVIEW_TYPES: readonly IncidentType[] = [
+  INCIDENT_TYPE.HOST_CANNOT_HOST,
+];
+
+export function isHiddenFromTraveler(incident: {
+  type: IncidentType;
+  status: IncidentStatus;
+}): boolean {
+  return (
+    TRAVELER_HIDDEN_IN_REVIEW_TYPES.includes(incident.type) &&
+    incident.status === INCIDENT_STATUS.IN_REVIEW
+  );
+}
 
 export function isOpenIncidentStatus(status: IncidentStatus): boolean {
   return OPEN_INCIDENT_STATUSES.includes(status);

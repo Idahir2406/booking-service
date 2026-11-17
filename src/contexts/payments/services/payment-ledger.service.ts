@@ -56,7 +56,17 @@ export const paymentKeys = {
   manual: (reservationId: number): string => `payment:manual:${reservationId}`,
   byPaymentIntent: (paymentIntentId: string): string =>
     `payment:pi:${paymentIntentId}`,
+  /** Fase 4: card saved by a setup session with no pending row to reuse. */
+  setup: (setupIntentId: string): string => `payment:setup:${setupIntentId}`,
 } as const;
+
+export interface MethodValidatedInput {
+  reservationId: number;
+  amountCents: number;
+  currency: string;
+  checkoutSessionId: string;
+  setupIntentId: string;
+}
 
 export const refundKeys = {
   external: (stripeRefundId: string): string =>
@@ -339,6 +349,50 @@ export class PaymentLedgerService {
         checkoutSessionId: input.checkoutSessionId,
         paymentIntentId: input.paymentIntentId,
         paidAt: new Date(),
+      },
+      actor,
+    );
+  }
+
+  /**
+   * Fase 4: setup Checkout Session completed (card saved, nothing charged).
+   * pending_charge -> method_validated; any other state (expired hold that
+   * is reactivated) gets its own method_validated row. Idempotent.
+   */
+  async recordMethodValidated(
+    manager: EntityManager,
+    input: MethodValidatedInput,
+    actor: Actor,
+  ): Promise<PaymentEntity> {
+    const latest = await this.findLatestCharge(manager, input.reservationId);
+    if (latest?.status === PAYMENT_STATUS.METHOD_VALIDATED) {
+      return latest;
+    }
+    if (latest?.status === PAYMENT_STATUS.PENDING_CHARGE) {
+      await this.transitionPayment(
+        manager,
+        latest,
+        PAYMENT_STATUS.METHOD_VALIDATED,
+        actor,
+        {
+          stripe_checkout_session_id: input.checkoutSessionId,
+          ...(latest.amount_cents === input.amountCents
+            ? {}
+            : { amount_cents: input.amountCents }),
+        },
+        { metadata: { setup_intent_id: input.setupIntentId } },
+      );
+      return latest;
+    }
+    return this.createPayment(
+      manager,
+      {
+        reservationId: input.reservationId,
+        amountCents: input.amountCents,
+        currency: input.currency,
+        status: PAYMENT_STATUS.METHOD_VALIDATED,
+        idempotencyKey: paymentKeys.setup(input.setupIntentId),
+        checkoutSessionId: input.checkoutSessionId,
       },
       actor,
     );

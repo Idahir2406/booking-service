@@ -34,6 +34,12 @@ import { SiteDogSupplyEntity } from "@/contexts/dog-supplies/entities/site-dog-s
 import { SpeciesEntity } from "@/contexts/species/entities/species.entity";
 
 import { SiteSettingsEntity } from "../entities/site-settings.entity";
+import {
+  cribsFromRow,
+  parseCribsInput,
+  type SiteCribs,
+  syncFamiliarCrib,
+} from "../utils/site-cribs.utils";
 import { normalizeCsvIds } from "../utils/site-property.utils";
 import {
   deriveServicesTipspec,
@@ -141,10 +147,15 @@ export class SiteServicesWizardService {
       tipservIds: catalog.tipservIds,
       tipspecExtraIds: catalog.tipspecExtraIds,
     });
-    if (!parsed.ok) {
-      throw new BadRequestException(parsed.errors);
+    const parsedCribs = parseCribsInput(body);
+    if (!parsed.ok || !parsedCribs.ok) {
+      throw new BadRequestException([
+        ...(parsed.ok ? [] : parsed.errors),
+        ...(parsedCribs.ok ? [] : parsedCribs.errors),
+      ]);
     }
     const input = parsed.value;
+    const cribs = parsedCribs.value;
 
     await this.legacyDb.transaction(async manager => {
       const site = await this.legacyDb.queryOne<RawSiteRow>(
@@ -165,6 +176,9 @@ export class SiteServicesWizardService {
         csvOrNull(site.tipspec),
         catalog,
       );
+      if (cribs !== undefined) {
+        await this.saveCribs(manager, siteId, cribs);
+      }
     });
 
     return this.buildPayload(siteId, catalog);
@@ -300,6 +314,56 @@ export class SiteServicesWizardService {
     );
   }
 
+  /**
+   * site_settings.cribs_* + legacy "Cuna" option in jsites1.familiar (so the
+   * public page / filters keep showing it). Runs after writeLegacySite, so it
+   * wins over a `features.familiar` sent in the same request.
+   */
+  private async saveCribs(
+    manager: EntityManager,
+    siteId: number,
+    cribs: SiteCribs,
+  ): Promise<void> {
+    await manager.query(
+      `INSERT INTO site_settings
+         (site_id, cribs_offered, cribs_count, cribs_is_paid, cribs_price, cribs_pricing_mode, cribs_note)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         cribs_offered = VALUES(cribs_offered),
+         cribs_count = VALUES(cribs_count),
+         cribs_is_paid = VALUES(cribs_is_paid),
+         cribs_price = VALUES(cribs_price),
+         cribs_pricing_mode = VALUES(cribs_pricing_mode),
+         cribs_note = VALUES(cribs_note)`,
+      [
+        siteId,
+        cribs.offered ? 1 : 0,
+        cribs.count,
+        cribs.is_paid ? 1 : 0,
+        cribs.price,
+        cribs.pricing_mode,
+        cribs.note,
+      ],
+    );
+    const row = await this.legacyDb.queryOne<{ familiar: string | null }>(
+      `SELECT familiar FROM ${legacyTableSql(LEGACY_TABLE.SITES1)}
+       WHERE id = ? AND customer = ?`,
+      [siteId, LEGACY_CUSTOMER],
+      manager,
+    );
+    if (row) {
+      await manager.query(
+        `UPDATE ${legacyTableSql(LEGACY_TABLE.SITES1)}
+         SET familiar = ? WHERE id = ? AND customer = ?`,
+        [
+          syncFamiliarCrib(row.familiar, cribs.offered),
+          siteId,
+          LEGACY_CUSTOMER,
+        ],
+      );
+    }
+  }
+
   private async buildPayload(
     siteId: number,
     catalog: ServicesCatalog,
@@ -307,7 +371,7 @@ export class SiteServicesWizardService {
     const featureColumns = catalog.groups.map(group =>
       columnSql(group.namesql),
     );
-    const [site, supplyRows, serviceRows] = await Promise.all([
+    const [site, supplyRows, serviceRows, cribRows] = await Promise.all([
       this.legacyDb.queryOne<RawSiteRow>(
         `SELECT ${["`tipserv`", "`tipspec`", ...featureColumns].join(", ")}
          FROM ${legacyTableSql(LEGACY_TABLE.SITES1)}
@@ -316,6 +380,11 @@ export class SiteServicesWizardService {
       ),
       this.siteSuppliesRepository.find({ where: { site_id: siteId } }),
       this.siteServicesRepository.find({ where: { site_id: siteId } }),
+      this.legacyDb.query<Parameters<typeof cribsFromRow>[0] & object>(
+        `SELECT cribs_offered, cribs_count, cribs_is_paid, cribs_price, cribs_pricing_mode, cribs_note
+         FROM site_settings WHERE site_id = ? LIMIT 1`,
+        [siteId],
+      ),
     ]);
     if (!site) {
       throw new NotFoundException(`site ${siteId} not found`);
@@ -362,6 +431,7 @@ export class SiteServicesWizardService {
         csvOrNull(site.tipspec),
         catalog.tipspecExtraIds,
       ),
+      cribs: cribsFromRow(cribRows[0] ?? null),
     };
   }
 

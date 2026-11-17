@@ -11,6 +11,7 @@ import { PRICE_LINE_TYPE } from "../../payments/entities/reservation-price-line.
 import { expectedChargeCents } from "./reservation-amount.util";
 import {
   getRefundDeadlineUtc,
+  isDeferredUnpaid,
   type ReservationPolicyInput,
 } from "./reservation-policy.util";
 
@@ -142,7 +143,8 @@ export function travelerPolicyAllowsCancel(
     reservation.payment_status === "paid" ||
     (reservation.payment_status === "partially_refunded" &&
       options.partialRefundFromChange === true);
-  if (!paidLike) {
+  // Fase 4: confirmed flexible reservation whose deferred charge is unpaid.
+  if (!paidLike && !isDeferredUnpaid(reservation)) {
     return false;
   }
   if (reservation.payout_status === "blocked") {
@@ -241,7 +243,7 @@ export function resolveNoShowQuote(
 }
 
 /** Refundable base: charged minus everything already refunded (>= 0). */
-function remainingPaidCents(reservation: ReservationEntity): number {
+export function remainingPaidCents(reservation: ReservationEntity): number {
   const alreadyRefunded = Math.round(
     Number(reservation.amount_refunded ?? 0) * 100,
   );
@@ -302,6 +304,7 @@ export function resolveTravelerCancellationQuote(
 
   const paidCents = remainingPaidCents(reservation);
   const isForceMajeure = reason === TRAVELER_CANCELLATION_REASON.FORCE_MAJEURE;
+  const deferredUnpaid = isDeferredUnpaid(reservation);
 
   let withinFree: boolean;
   let deadlineIso: string | null;
@@ -327,6 +330,9 @@ export function resolveTravelerCancellationQuote(
       first_night_cents: firstNightCentsFromSnapshot(snapshot),
       booked_at: reservation.created_at,
       now,
+      // Structured snapshot: the frozen local deadline time ("18:00", A6)
+      // applies; the penalty starts AT that instant.
+      deadline_local_time: snapshot.refund_policy.deadline_local_time ?? null,
     });
     withinFree = quote.within_free_period;
     deadlineIso = quote.deadline_iso;
@@ -338,6 +344,24 @@ export function resolveTravelerCancellationQuote(
     deadlineIso = resolveSnapshotRefundDeadlineIso(snapshot, reservation);
     refundCents = withinFree ? paidCents : 0;
     penaltyCents = paidCents - refundCents;
+  }
+
+  if (deferredUnpaid) {
+    // Fase 4: nothing was charged. penalty_cents is what the cancellation
+    // charges off-session (0 inside the free period); nothing is refunded.
+    // force_majeure: no automatic charge, V4P reviews the penalty.
+    return {
+      can_cancel: canCancel,
+      paid_cents: 0,
+      penalty_cents: isForceMajeure ? 0 : penaltyCents,
+      refund_cents: 0,
+      within_free_period: withinFree,
+      deadline_iso: deadlineIso,
+      policy_text: policyText,
+      releases_inventory: canCancel,
+      requires_review: isForceMajeure,
+      source,
+    };
   }
 
   if (isForceMajeure) {

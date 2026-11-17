@@ -19,6 +19,7 @@ import {
   INCIDENT_AUTHOR,
   type IncidentAuthor,
   incidentRef,
+  isHiddenFromTraveler,
   isOpenIncidentStatus,
 } from "../utils/reservation-incident.util";
 import { ReservationIncidentService } from "./reservation-incident.service";
@@ -118,9 +119,11 @@ export class TravelerIncidentInboxService {
       return { items: [], total: 0 };
     }
     const byId = new Map(reservations.map(row => [row.id, row]));
-    const incidents = await this.incidentRepository.find({
+    // host_cannot_host stays hidden while V4P reviews it.
+    const allIncidents = await this.incidentRepository.find({
       where: { reservation_id: In([...byId.keys()]) },
     });
+    const incidents = allIncidents.filter(row => !isHiddenFromTraveler(row));
     if (incidents.length === 0) {
       return { items: [], total: 0 };
     }

@@ -20,6 +20,7 @@ import { CheckoutReservationDto } from "../dto/checkout-reservation.dto";
 import { CreateReservationDto } from "../dto/create-reservation.dto";
 import { ExceptionalRefundRequestDto } from "../dto/exceptional-refund-request.dto";
 import { FinalizeReservationDto } from "../dto/finalize-reservation.dto";
+import { ReportHostCannotHostDto } from "../dto/host-cannot-host.dto";
 import { ReportNoShowDto } from "../dto/no-show.dto";
 import { QuoteReservationDto } from "../dto/quote-reservation.dto";
 import { ReservationPublicSummaryDto } from "../dto/reservation-public-summary.dto";
@@ -30,6 +31,8 @@ import {
   toPublicQuote,
 } from "../services/reservation.service";
 import { ReservationFeedbackService } from "../services/reservation-feedback.service";
+import { ReservationHistoryService } from "../services/reservation-history.service";
+import { ReservationHostCannotHostService } from "../services/reservation-host-cannot-host.service";
 import { ReservationLifecycleService } from "../services/reservation-lifecycle.service";
 import { ReservationNoShowService } from "../services/reservation-no-show.service";
 import { ReservationRefundService } from "../services/reservation-refund.service";
@@ -52,6 +55,8 @@ export class ReservationController {
     private readonly refundService: ReservationRefundService,
     private readonly feedbackService: ReservationFeedbackService,
     private readonly noShowService: ReservationNoShowService,
+    private readonly hostCannotHostService: ReservationHostCannotHostService,
+    private readonly historyService: ReservationHistoryService,
   ) {}
 
   @Get("by-site/:site_id/range")
@@ -159,6 +164,34 @@ export class ReservationController {
     @Body() dto: ReportNoShowDto,
   ) {
     return this.noShowService.reportByHost(id, dto.site_id, dto.note);
+  }
+
+  /**
+   * Host "Comunicar imposibilidad de alojar": never cancels by itself; opens
+   * a V4P review (payout of this reservation blocked).
+   */
+  @Post(":id/host-cannot-host")
+  @UseGuards(InternalApiKeyGuard)
+  reportHostCannotHost(
+    @Param("id", ParseIntPipe) id: number,
+    @Body() dto: ReportHostCannotHostDto,
+  ) {
+    return this.hostCannotHostService.reportByHost(
+      id,
+      dto.site_id,
+      dto.reason,
+      dto.description,
+    );
+  }
+
+  /** Host activity history of one of its reservations (site from the PHP session). */
+  @Get(":id/history")
+  @UseGuards(InternalApiKeyGuard)
+  history(
+    @Param("id", ParseIntPipe) id: number,
+    @Query("site_id", ParseIntPipe) siteId: number,
+  ) {
+    return this.historyService.getForHost(id, siteId);
   }
 
   @Get(":id")

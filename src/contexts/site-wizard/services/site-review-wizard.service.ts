@@ -44,8 +44,10 @@ import {
   missingRequired,
   missingRequiredErrors,
   parsePublishInput,
+  relaxedItemsFor,
   REVIEW_ITEM,
 } from "../utils/site-review.utils";
+import { isScheduleConfigured } from "../utils/site-schedule.utils";
 import { SiteBookingSettingsWizardService } from "./site-booking-settings-wizard.service";
 import { SiteContentWizardService } from "./site-content-wizard.service";
 import { SiteDogPolicyWizardService } from "./site-dog-policy-wizard.service";
@@ -120,28 +122,35 @@ export class SiteReviewWizardService {
     ]);
 
     const activePolicies = dogPolicy.units.filter(unit => unit.is_active);
-    const completeness = buildCompleteness({
-      [REVIEW_ITEM.PROPERTY]: isPropertyComplete(state.property),
-      [REVIEW_ITEM.UNITS]: state.units_count > 0,
-      [REVIEW_ITEM.DOG_POLICY]:
-        isMaxPetsAnswered({
-          max_pets: dogPolicy.max_pets,
-          max_pets_unlimited: dogPolicy.max_pets_unlimited,
-        }) &&
-        activePolicies.length > 0 &&
-        activePolicies.every(unit => unit.missing.length === 0),
-      [REVIEW_ITEM.SUPPLIES_REVIEWED]:
-        services.dog_supplies.length > 0 &&
-        services.dog_supplies.every(row => row.state !== "unanswered"),
-      [REVIEW_ITEM.FEATURES]: Object.values(services.features).some(
-        ids => ids.length > 0,
-      ),
-      [REVIEW_ITEM.COVER_PHOTO]: content.images.some(image => image.slot === 1),
-      [REVIEW_ITEM.DESCRIPTION_SHORT]: content.description_short !== "",
-      [REVIEW_ITEM.DESCRIPTION_LONG]: content.description_long !== "",
-      [REVIEW_ITEM.AVAILABILITY]: booking.availability.configured,
-      [REVIEW_ITEM.STRIPE]: stripeConnected,
-    });
+    const completeness = buildCompleteness(
+      {
+        [REVIEW_ITEM.PROPERTY]: isPropertyComplete(state.property),
+        [REVIEW_ITEM.UNITS]: state.units_count > 0,
+        [REVIEW_ITEM.DOG_POLICY]:
+          isMaxPetsAnswered({
+            max_pets: dogPolicy.max_pets,
+            max_pets_unlimited: dogPolicy.max_pets_unlimited,
+          }) &&
+          activePolicies.length > 0 &&
+          activePolicies.every(unit => unit.missing.length === 0),
+        [REVIEW_ITEM.SUPPLIES_REVIEWED]:
+          services.dog_supplies.length > 0 &&
+          services.dog_supplies.every(row => row.state !== "unanswered"),
+        [REVIEW_ITEM.FEATURES]: Object.values(services.features).some(
+          ids => ids.length > 0,
+        ),
+        [REVIEW_ITEM.COVER_PHOTO]: content.images.some(
+          image => image.slot === 1,
+        ),
+        [REVIEW_ITEM.DESCRIPTION_SHORT]: content.description_short !== "",
+        [REVIEW_ITEM.DESCRIPTION_LONG]: content.description_long !== "",
+        [REVIEW_ITEM.AVAILABILITY]: booking.availability.configured,
+        [REVIEW_ITEM.CANCELLATION_POLICY]: booking.cancellation !== null,
+        [REVIEW_ITEM.SCHEDULE]: isScheduleConfigured(booking.schedule),
+        [REVIEW_ITEM.STRIPE]: stripeConnected,
+      },
+      { optional: relaxedItemsFor(settings?.wizard_completed_at != null) },
+    );
     const missing = missingRequired(completeness);
 
     const score = computeDogFriendlyScore({

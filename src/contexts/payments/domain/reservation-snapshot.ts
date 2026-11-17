@@ -1,4 +1,3 @@
-import type { CancellationPolicyDefinition } from "./cancellation-policy";
 import type { Cents, Rate } from "../utils/money.util";
 import type { PriceLineDraft, PriceLinesSummary } from "./price-lines";
 
@@ -6,12 +5,26 @@ import {
   getRefundDeadlineUtc,
   REFUND_WINDOW_MS,
 } from "../../reservations/utils/reservation-policy.util";
+import {
+  CANCELLATION_POLICY_TYPE,
+  type CancellationPolicyDefinition,
+  type ChargeMode,
+  formatDeadlineLocal,
+  freeCancellationDeadlineIso,
+  generateCancellationText,
+} from "./cancellation-policy";
 
 export const SNAPSHOT_SCHEMA_VERSION = 1;
 
 /** Refund rule in force today (host-initiated, 24 h before check-in, UTC). */
 export const CURRENT_REFUND_RULE =
   "legacy_host_full_refund_until_24h_before_checkin";
+
+/** Structured cancellation policy of the site frozen at booking (Fase 3). */
+export const STRUCTURED_REFUND_RULE = "structured_cancellation_policy";
+
+const DEFAULT_SNAPSHOT_TIMEZONE = "Europe/Madrid";
+const DEFAULT_DEADLINE_TIME = "18:00";
 
 export interface SnapshotRoom {
   id: number;
@@ -59,6 +72,34 @@ export interface SnapshotRefundRule {
    */
   cancellation?: CancellationPolicyDefinition | null;
   generated_text?: string | null;
+  /**
+   * Only with `cancellation`: local date (YYYY-MM-DD, `timezone`) of the
+   * free-cancellation deadline; null for partial / non-refundable.
+   */
+  deadline_local_date?: string | null;
+  /** Only with `cancellation`: charge mode frozen at booking. */
+  charge_mode?: ChargeMode | null;
+  /** Only with `cancellation`: ISO instant of the deferred charge (flexible). */
+  charge_at?: string | null;
+  /** Only with `cancellation`: booking instant (grace exception base). */
+  booked_at?: string | null;
+}
+
+/** Structured policy + charge plan frozen at booking (snapshot input). */
+export interface SnapshotCancellationTerms {
+  policy: CancellationPolicyDefinition;
+  /** Booking instant (ISO): start of the grace exception and of the penalty. */
+  booked_at_iso: string;
+  charge_mode: ChargeMode;
+  charge_at_iso: string | null;
+}
+
+export interface StructuredRefundRuleInput {
+  checkin: string;
+  /** "HH:MM" local time of the deadline (platform_settings). */
+  deadlineLocalTime: string;
+  timezone: string;
+  terms: SnapshotCancellationTerms;
 }
 
 /** Traveler dog as declared at booking time (C2: weight + derived size). */
@@ -154,6 +195,13 @@ export interface SnapshotSelectedExtra {
   amount_cents: Cents;
 }
 
+/** Check-in / check-out schedule of the site at booking time (local "HH:MM"). */
+export interface SnapshotSchedule {
+  checkin_from: string | null;
+  checkin_until: string | null;
+  checkout_until: string | null;
+}
+
 /** F2 additions to the v1 payload (all optional for legacy/manual rows). */
 export interface SnapshotF2Extension {
   dogs: SnapshotDog[];
@@ -164,6 +212,17 @@ export interface SnapshotF2Extension {
   deposit: SnapshotDeposit | null;
   /** null until a data source exists (see F2 doc). */
   tourist_tax: null;
+  /** Site schedule frozen at booking time (absent on older snapshots). */
+  schedule?: SnapshotSchedule | null;
+  /** Cribs requested (absent on older snapshots, null = none). */
+  cribs?: SnapshotCribs | null;
+}
+
+export interface SnapshotCribs {
+  quantity: number;
+  is_paid: boolean;
+  price_cents: Cents;
+  pricing_mode: string;
 }
 
 export interface ReservationSnapshotPayload {
@@ -200,6 +259,8 @@ export interface BuildSnapshotInput {
   commissionBase?: SnapshotCommission["base"];
   /** F2 payload additions (dogs, dog policy, services, deposit...). */
   extension?: SnapshotF2Extension | null;
+  /** Structured policy of the site; absent/null = legacy 24 h rule. */
+  cancellation?: SnapshotCancellationTerms | null;
 }
 
 export function buildRefundRule(
@@ -213,6 +274,76 @@ export function buildRefundRule(
     refund_deadline: getRefundDeadlineUtc(checkin).toISOString(),
     deadline_local_time: deadlineLocalTime,
     timezone,
+  };
+}
+
+function addHoursIso(iso: string, hours: number): string {
+  return new Date(new Date(iso).getTime() + hours * 3_600_000).toISOString();
+}
+
+/**
+ * Structured rule: frozen policy, generated text and deadline in the local
+ * time of the accommodation. `refund_deadline` = last instant a full refund
+ * is possible (same union quoteCancellation applies: free deadline, grace
+ * after booking, early cancellation); for partial / non-refundable without
+ * exceptions it is the booking instant (no free period).
+ */
+export function buildStructuredRefundRule(
+  input: StructuredRefundRuleInput,
+): SnapshotRefundRule {
+  const { policy } = input.terms;
+  const timeZone = input.timezone || DEFAULT_SNAPSHOT_TIMEZONE;
+  const deadlineIso =
+    policy.policy_type === CANCELLATION_POLICY_TYPE.FREE_CANCELLATION &&
+    policy.deadline_days != null
+      ? freeCancellationDeadlineIso(
+          input.checkin,
+          policy.deadline_days,
+          timeZone,
+          input.deadlineLocalTime,
+        )
+      : null;
+  const deadlineLocal = deadlineIso
+    ? formatDeadlineLocal(deadlineIso, timeZone)
+    : null;
+  const candidates = [input.terms.booked_at_iso];
+  if (deadlineIso) {
+    candidates.push(deadlineIso);
+  }
+  if (policy.grace_after_booking_hours != null) {
+    candidates.push(
+      addHoursIso(input.terms.booked_at_iso, policy.grace_after_booking_hours),
+    );
+  }
+  if (policy.early_cancellation_weeks != null) {
+    candidates.push(
+      freeCancellationDeadlineIso(
+        input.checkin,
+        policy.early_cancellation_weeks * 7,
+        timeZone,
+        input.deadlineLocalTime,
+      ),
+    );
+  }
+  const refundDeadlineMs = Math.max(
+    ...candidates.map(iso => new Date(iso).getTime()),
+  );
+  return {
+    rule: STRUCTURED_REFUND_RULE,
+    window_hours: deadlineIso ? (policy.deadline_days ?? 0) * 24 : 0,
+    refund_deadline: new Date(refundDeadlineMs).toISOString(),
+    deadline_local_time: input.deadlineLocalTime,
+    timezone: timeZone,
+    cancellation: structuredClone(policy),
+    generated_text: generateCancellationText(
+      policy,
+      deadlineIso,
+      deadlineLocal,
+    ),
+    deadline_local_date: deadlineLocal?.date ?? null,
+    charge_mode: input.terms.charge_mode,
+    charge_at: input.terms.charge_at_iso,
+    booked_at: input.terms.booked_at_iso,
   };
 }
 
@@ -240,11 +371,18 @@ export function buildReservationSnapshotPayload(
       commissionable_cents: input.totals.commissionable_cents,
       penalizable_cents: input.totals.penalizable_cents,
     },
-    refund_policy: buildRefundRule(
-      input.stay.checkin,
-      input.deadlineLocalTime,
-      input.timezone,
-    ),
+    refund_policy: input.cancellation
+      ? buildStructuredRefundRule({
+          checkin: input.stay.checkin,
+          deadlineLocalTime: input.deadlineLocalTime ?? DEFAULT_DEADLINE_TIME,
+          timezone: input.timezone ?? DEFAULT_SNAPSHOT_TIMEZONE,
+          terms: input.cancellation,
+        })
+      : buildRefundRule(
+          input.stay.checkin,
+          input.deadlineLocalTime,
+          input.timezone,
+        ),
     timezone: input.timezone,
     source: input.source,
     ...extension,

@@ -3,6 +3,7 @@ import type { TravelerCancelPreviewResponseDto } from "../dto/traveler-panel.dto
 
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   forwardRef,
   Inject,
@@ -13,6 +14,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { EntityManager, Repository } from "typeorm";
 
 import { actors } from "../../payments/domain/audit-actor";
+import { PAYMENT_STATUS } from "../../payments/domain/payment-state-machine";
 import { ReviewRefundDto } from "../../payments/dto/review-refund.dto";
 import { RefundEntity } from "../../payments/entities/refund.entity";
 import { ReservationEconomicsService } from "../../payments/services/reservation-economics.service";
@@ -33,7 +35,13 @@ import {
   travelerPolicyAllowsCancel,
 } from "../utils/refund-policy.util";
 import { expectedChargeCents } from "../utils/reservation-amount.util";
+import { isDeferredUnpaid } from "../utils/reservation-policy.util";
 import { ReservationService } from "./reservation.service";
+import {
+  PENALTY_CHARGE_OUTCOME,
+  type PenaltyChargeOutcome,
+  ReservationDeferredChargeService,
+} from "./reservation-deferred-charge.service";
 import { ReservationEmailService } from "./reservation-email.service";
 import { ReservationEventService } from "./reservation-event.service";
 import { ReservationIncidentService } from "./reservation-incident.service";
@@ -46,6 +54,17 @@ interface CancelTravelerOutcome {
   refundId?: number;
   /** F-PV7a: incident linked to the force_majeure dispute (attachments). */
   incidentId?: number;
+  /** Fase 4: flexible reservation cancelled before its deferred charge. */
+  deferred?: DeferredCancelOutcome;
+}
+
+/** Fase 4: what the cancellation of an unpaid flexible reservation did. */
+interface DeferredCancelOutcome {
+  penaltyCents: number;
+  penaltyOutcome: PenaltyChargeOutcome | "not_charged_review";
+  failure: string | null;
+  /** Saved card to detach after commit (nothing more will be charged). */
+  detachPaymentMethodId: string | null;
 }
 
 @Injectable()
@@ -71,6 +90,8 @@ export class ReservationRefundService {
     )
     private readonly stripeService: StripeService,
     private readonly incidentService: ReservationIncidentService,
+    // Fase 4 (last so pre-existing fixtures keep their positional args).
+    private readonly deferredChargeService?: ReservationDeferredChargeService,
   ) {}
 
   private async lockReservation(
@@ -187,6 +208,7 @@ export class ReservationRefundService {
         snapshot?.refund_policy.timezone ??
         reservation.timezone ??
         "Europe/Madrid",
+      charge_pending: isDeferredUnpaid(reservation),
     };
   }
 
@@ -283,6 +305,18 @@ export class ReservationRefundService {
         if (reservation.payout_status === "released") {
           throw new BadRequestException(
             "Cannot cancel after the host payout was released",
+          );
+        }
+
+        if (isDeferredUnpaid(reservation)) {
+          // Fase 4: never charged -> no Stripe refund ever (refundInTransaction
+          // needs a PaymentIntent). Penalty, if any, is charged off-session.
+          return this.cancelDeferredUnpaid(
+            manager,
+            reservation,
+            dto,
+            quote,
+            now,
           );
         }
 
@@ -398,9 +432,150 @@ export class ReservationRefundService {
           dto.notes,
         );
       }
+      const deferred = outcome.deferred;
+      if (deferred?.penaltyOutcome === PENALTY_CHARGE_OUTCOME.FAILED) {
+        await this.reservationEmailService.sendDeferredPenaltyFailedAdminEmail(
+          outcome.reservation,
+          site,
+          deferred.penaltyCents,
+          deferred.failure ?? "",
+        );
+      }
+      if (deferred?.detachPaymentMethodId && this.deferredChargeService) {
+        await this.deferredChargeService.detachQuietly(
+          deferred.detachPaymentMethodId,
+        );
+      }
     }
 
     return outcome;
+  }
+
+  /**
+   * Fase 4: traveler cancels a confirmed flexible reservation whose
+   * deferred charge never succeeded (method saved, charge pending or in
+   * regularization). Caller holds the row lock.
+   * - free period (penalty 0): cancel, nothing charged, card detached;
+   * - penalty > 0: charged off-session with the saved card; if it fails,
+   *   an incident (charge_issue) is opened for V4P and the card is kept;
+   * - force_majeure: nothing charged automatically, V4P reviews (incident).
+   * A charge already in flight (ledger processing) blocks the cancellation.
+   */
+  private async cancelDeferredUnpaid(
+    manager: EntityManager,
+    reservation: ReservationEntity,
+    dto: TravelerCancelReservationDto,
+    quote: TravelerCancellationQuote,
+    now: Date,
+  ): Promise<CancelTravelerOutcome> {
+    const deferredService = this.deferredChargeService;
+    if (!deferredService) {
+      throw new Error("ReservationDeferredChargeService is not available");
+    }
+    const id = reservation.id;
+    const actor = actors.traveler(dto.user_id);
+    const reason = dto.cancellation_reason satisfies TravelerCancellationReason;
+    const payment = await this.economics.findLatestPayment(manager, id);
+    if (payment?.status === PAYMENT_STATUS.PROCESSING) {
+      throw new ConflictException(
+        "The payment of this reservation is being processed; try again in a few minutes",
+      );
+    }
+
+    const isForceMajeure =
+      reason === TRAVELER_CANCELLATION_REASON.FORCE_MAJEURE;
+    const paymentMethodId = reservation.stripe_payment_method_id ?? null;
+    let deferred: DeferredCancelOutcome;
+    let incidentId: number | undefined;
+
+    if (isForceMajeure) {
+      const incident =
+        await this.incidentService.openChargeIssueIncidentInTransaction(
+          manager,
+          {
+            reservationId: id,
+            userId: dto.user_id,
+            description:
+              `Cancelación por fuerza mayor de una reserva con cobro diferido aún no cobrado. Revisar si procede cobrar la penalización. ${dto.notes ?? ""}`.trim(),
+          },
+        );
+      incidentId = incident.id;
+      deferred = {
+        penaltyCents: 0,
+        penaltyOutcome: "not_charged_review",
+        failure: null,
+        detachPaymentMethodId: null,
+      };
+    } else {
+      const penalty = await deferredService.chargePenaltyInTransaction(
+        manager,
+        reservation,
+        quote.penalty_cents,
+        actor,
+      );
+      const failure =
+        penalty.outcome === PENALTY_CHARGE_OUTCOME.FAILED
+          ? (penalty.failureCode ?? "penalty_charge_failed")
+          : null;
+      if (failure !== null) {
+        const incident =
+          await this.incidentService.openChargeIssueIncidentInTransaction(
+            manager,
+            {
+              reservationId: id,
+              userId: dto.user_id,
+              description: `No se ha podido cobrar la penalización de cancelación (${(quote.penalty_cents / 100).toFixed(2)} €) con la tarjeta guardada: ${failure}.`,
+            },
+          );
+        incidentId = incident.id;
+      }
+      deferred = {
+        penaltyCents: quote.penalty_cents,
+        penaltyOutcome: penalty.outcome,
+        failure,
+        // Keep the card while V4P may still need it (failed / settling).
+        detachPaymentMethodId:
+          penalty.outcome === PENALTY_CHARGE_OUTCOME.NONE ||
+          penalty.outcome === PENALTY_CHARGE_OUTCOME.CHARGED
+            ? paymentMethodId
+            : null,
+      };
+    }
+
+    reservation.status = "cancelled";
+    reservation.cancelled_at = now;
+    reservation.cancel_reason = reason;
+    reservation.refund_on_cancel = false;
+    reservation.regularization_deadline_at = null;
+    const saved = await manager
+      .getRepository(ReservationEntity)
+      .save(reservation);
+    await this.reservationService.releaseAvailabilityForReservation(
+      saved,
+      manager,
+    );
+    await this.reservationEventService.logEventInTransaction(
+      manager,
+      id,
+      "cancelled",
+      {
+        by: "traveler",
+        reason,
+        refund: false,
+        deferred_charge: true,
+        penalty_outcome: deferred.penaltyOutcome,
+        penalty_failure: deferred.failure,
+        notes: dto.notes ?? null,
+        ...this.quoteEventPayload(quote),
+      },
+    );
+    return {
+      reservation: saved,
+      refundInitiated: false,
+      refundPendingReview: false,
+      incidentId,
+      deferred,
+    };
   }
 
   private async openForceMajeureDispute(

@@ -13,6 +13,12 @@ export interface ReservationWithRoomName extends ReservationPolicyCapabilities {
   guest_email?: string;
   guest_phone?: string;
   guest_notes?: string;
+  /** Cribs requested by the traveler (0 = none). */
+  cribs?: number;
+  /** Traveler's estimated arrival ("HH:MM:SS"), optional. */
+  arrival_time?: string | null;
+  /** Site check-out time frozen at booking ("HH:MM:SS"). */
+  checkout_until?: string | null;
   checkin: string;
   checkout: string;
   guests: number;
@@ -41,4 +47,8 @@ export interface ReservationWithRoomName extends ReservationPolicyCapabilities {
   paid_at?: Date;
   created_at: Date;
   updated_at: Date;
+  /** Host may "Comunicar imposibilidad de alojar" (no open request, before check-out). */
+  can_report_cannot_host: boolean;
+  /** An imposibilidad de alojar request is under V4P review. */
+  cannot_host_pending: boolean;
 }

@@ -1,4 +1,10 @@
-import { IsEmail, IsOptional, IsString, MaxLength } from "class-validator";
+import {
+  IsEmail,
+  IsOptional,
+  IsString,
+  Matches,
+  MaxLength,
+} from "class-validator";
 
 import { QuoteReservationDto } from "./quote-reservation.dto";
 
@@ -15,6 +21,12 @@ export class CheckoutReservationDto extends QuoteReservationDto {
   @IsOptional()
   @IsString()
   guest_notes?: string;
+
+  /** Estimated arrival "HH:MM" (30-min steps), inside the site check-in window. */
+  @IsOptional()
+  @IsString()
+  @Matches(/^([01]\d|2[0-3]):(00|30)$/)
+  arrival_time?: string;
 
   /**
    * F2 security fix: signed traveler id issued by the PHP page from the PHP

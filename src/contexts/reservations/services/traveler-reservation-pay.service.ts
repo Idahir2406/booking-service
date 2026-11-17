@@ -15,7 +15,9 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 
+import { PAYMENT_STATUS } from "../../payments/domain/payment-state-machine";
 import {
+  isDeferredUnpaid,
   STRIPE_CHECKOUT_EXPIRY_MARGIN_MS,
   STRIPE_CHECKOUT_MAX_EXPIRY_MS,
   STRIPE_CHECKOUT_MIN_EXPIRY_MS,
@@ -51,6 +53,13 @@ const EXPIRY_CANCEL_REASONS = new Set([
 ]);
 
 const STRIPE_CHECKOUT_HOST_RE = /(^|\.)stripe\.com$/i;
+
+/** Fase 4: ledger states in which a deferred reservation can be paid. */
+const DEFERRED_PAYABLE_STATUSES = new Set<string>([
+  PAYMENT_STATUS.METHOD_VALIDATED,
+  PAYMENT_STATUS.FAILED,
+  PAYMENT_STATUS.PENDING_REGULARIZATION,
+]);
 
 /** Only https URLs on stripe.com (checkout.stripe.com) are handed out. */
 export function isStripeCheckoutUrl(value: string | null | undefined): boolean {
@@ -118,25 +127,36 @@ export class TravelerReservationPayService {
       throw new ForbiddenException("Reservation access denied");
     }
 
-    this.assertPayable(reservation, now);
+    // Fase 4: a confirmed flexible reservation whose deferred charge is
+    // unpaid (regularization, or paying before charge_at) pays its total
+    // through a normal Checkout Session. Its nights are already blocked.
+    const deferred = isDeferredUnpaid(reservation);
+    if (deferred) {
+      await this.assertDeferredPayable(reservation, now);
+    } else {
+      this.assertPayable(reservation, now);
 
-    try {
-      await this.reservationService.assertPendingDatesStillFree(reservation);
-    } catch (error) {
-      if (error instanceof ConflictException) {
-        throw payError(
-          409,
-          TRAVELER_PAY_ERROR.UNAVAILABLE,
-          "Las fechas ya no están disponibles.",
-        );
+      try {
+        await this.reservationService.assertPendingDatesStillFree(reservation);
+      } catch (error) {
+        if (error instanceof ConflictException) {
+          throw payError(
+            409,
+            TRAVELER_PAY_ERROR.UNAVAILABLE,
+            "Las fechas ya no están disponibles.",
+          );
+        }
+        throw error;
       }
-      throw error;
     }
 
     const currentSessionId = reservation.stripe_checkout_session_id ?? null;
     if (currentSessionId !== null) {
-      const session =
+      const fetched =
         await this.stripeService.retrieveCheckoutSessionState(currentSessionId);
+      // The completed setup session of a flexible reservation is not a
+      // payment: a new payment session replaces it.
+      const session = deferred && fetched?.mode === "setup" ? null : fetched;
       if (session?.status === "open") {
         if (!isStripeCheckoutUrl(session.url)) {
           // Never open a second payable session next to an open one.
@@ -159,7 +179,9 @@ export class TravelerReservationPayService {
       }
     }
 
-    const expiresAtUnix = this.resolveReplacementExpiry(reservation, now);
+    const expiresAtUnix = deferred
+      ? this.resolveDeferredExpiry(reservation, now)
+      : this.resolveReplacementExpiry(reservation, now);
     const created = await this.stripeService.createReplacementCheckoutSession({
       reservation,
       replacedSessionId: currentSessionId,
@@ -237,6 +259,70 @@ export class TravelerReservationPayService {
         "Esta reserva ha caducado.",
       );
     }
+  }
+
+  /**
+   * Fase 4: confirmed flexible + unpaid. Payable while the saved-card charge
+   * is not running: method_validated (early payment) or failed /
+   * pending_regularization (before regularization_deadline_at).
+   */
+  private async assertDeferredPayable(
+    reservation: ReservationEntity,
+    now: Date,
+  ): Promise<void> {
+    const deadline = reservation.regularization_deadline_at
+      ? new Date(reservation.regularization_deadline_at).getTime()
+      : null;
+    if (deadline !== null && deadline <= now.getTime()) {
+      throw payError(
+        410,
+        TRAVELER_PAY_ERROR.EXPIRED,
+        "El plazo para pagar esta reserva ha terminado.",
+      );
+    }
+    const status = await this.reservationService.findLatestPaymentStatus(
+      reservation.id,
+    );
+    if (status === PAYMENT_STATUS.PROCESSING) {
+      throw payError(
+        409,
+        TRAVELER_PAY_ERROR.PAYMENT_PROCESSING,
+        "El pago de esta reserva se está procesando.",
+      );
+    }
+    if (status === null || !DEFERRED_PAYABLE_STATUSES.has(status)) {
+      throw payError(
+        409,
+        TRAVELER_PAY_ERROR.NOT_PAYABLE,
+        "Esta reserva no se puede pagar.",
+      );
+    }
+  }
+
+  /**
+   * Fase 4: session expiry for a deferred payment: the regularization
+   * deadline when there is one, else Stripe's 24 h maximum. Needs >= 30 min.
+   */
+  private resolveDeferredExpiry(
+    reservation: ReservationEntity,
+    now: Date,
+  ): number {
+    const maxMs = now.getTime() + STRIPE_CHECKOUT_MAX_EXPIRY_MS;
+    const deadlineMs = reservation.regularization_deadline_at
+      ? new Date(reservation.regularization_deadline_at).getTime()
+      : maxMs;
+    const minMs =
+      now.getTime() +
+      STRIPE_CHECKOUT_MIN_EXPIRY_MS +
+      STRIPE_CHECKOUT_EXPIRY_MARGIN_MS;
+    if (!Number.isFinite(deadlineMs) || deadlineMs < minMs) {
+      throw payError(
+        410,
+        TRAVELER_PAY_ERROR.EXPIRED,
+        "El plazo para pagar esta reserva ha terminado.",
+      );
+    }
+    return Math.floor(Math.min(deadlineMs, maxMs) / 1000);
   }
 
   /**

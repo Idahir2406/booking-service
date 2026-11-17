@@ -23,6 +23,7 @@ import { stripeIdempotencyKeys } from "../../stripe/utils/stripe-idempotency.uti
 import { ReservationEntity } from "../entities/reservation.entity";
 import { ReservationGuestFeedbackEntity } from "../entities/reservation-guest-feedback.entity";
 import { expectedChargeCents } from "../utils/reservation-amount.util";
+import { isDeferredUnpaid } from "../utils/reservation-policy.util";
 import { ReservationService } from "./reservation.service";
 import { ReservationEmailService } from "./reservation-email.service";
 import { ReservationEventService } from "./reservation-event.service";
@@ -301,6 +302,12 @@ export class ReservationPayoutService {
     reason?: string,
     context: RefundContext = SYSTEM_REFUND_CONTEXT,
   ): Promise<RefundInTransactionResult> {
+    if (isDeferredUnpaid(reservation)) {
+      // Fase 4: deferred charge not made yet -> nothing was ever charged.
+      throw new BadRequestException(
+        `Reservation ${reservation.id} has an unpaid deferred charge; nothing to refund`,
+      );
+    }
     if (!reservation.stripe_payment_intent_id) {
       throw new BadRequestException(
         `Reservation ${reservation.id} has no payment intent to refund`,

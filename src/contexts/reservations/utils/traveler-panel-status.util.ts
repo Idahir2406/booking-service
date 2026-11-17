@@ -52,7 +52,10 @@ export type TravelerRefundLabelKey =
   (typeof TRAVELER_REFUND_LABEL)[keyof typeof TRAVELER_REFUND_LABEL];
 
 export interface TravelerStatusInput {
-  reservation: Pick<ReservationEntity, "status" | "payment_status">;
+  reservation: Pick<ReservationEntity, "status" | "payment_status"> &
+    Partial<
+      Pick<ReservationEntity, "charge_mode" | "regularization_deadline_at">
+    >;
   has_open_dispute: boolean;
   has_pending_refund: boolean;
   /** F-PV7a: reservation_incidents in received/in_review/needs_info. */
@@ -103,6 +106,20 @@ export function mapTravelerFacingStatus(
       input.partial_refund_from_change === true);
   if (reservation.status === "confirmed" && paidLike) {
     return { status: TRAVELER_STATUS.CONFIRMED, is_fallback: false };
+  }
+  // Fase 4: confirmed flexible reservation, card saved, charge pending
+  // (or failed: then «Pago pendiente» until the regularization deadline).
+  if (
+    reservation.status === "confirmed" &&
+    reservation.charge_mode === "flexible" &&
+    reservation.payment_status === "pending"
+  ) {
+    return {
+      status: reservation.regularization_deadline_at
+        ? TRAVELER_STATUS.PAYMENT_PENDING
+        : TRAVELER_STATUS.CONFIRMED,
+      is_fallback: false,
+    };
   }
   return { status: TRAVELER_STATUS.IN_PROGRESS, is_fallback: true };
 }
@@ -163,9 +180,30 @@ export function resolveTravelerPayability(
   reservation: Pick<
     ReservationEntity,
     "status" | "payment_status" | "expiration_date" | "checkin"
-  >,
+  > &
+    Partial<
+      Pick<ReservationEntity, "charge_mode" | "regularization_deadline_at">
+    >,
   now: Date,
 ): TravelerPayability {
+  // Fase 4: failed deferred charge -> payable until the regularization
+  // deadline (the pay route also accepts paying before charge_at).
+  if (
+    reservation.status === "confirmed" &&
+    reservation.charge_mode === "flexible" &&
+    reservation.payment_status === "pending"
+  ) {
+    const deadlineMs = reservation.regularization_deadline_at
+      ? new Date(reservation.regularization_deadline_at).getTime()
+      : Number.NaN;
+    if (!Number.isFinite(deadlineMs) || deadlineMs <= now.getTime()) {
+      return NOT_PAYABLE;
+    }
+    return {
+      can_pay: true,
+      pay_expires_at: new Date(deadlineMs).toISOString(),
+    };
+  }
   if (
     reservation.status !== "pending" ||
     reservation.payment_status !== "pending"

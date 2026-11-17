@@ -173,7 +173,7 @@ stateDiagram-v2
   failed --> pending_regularization: cobro exigible fallido (F3)
   pending_regularization --> paid
   pending_regularization --> processing
-  pending_regularization --> definitive_unpaid: fin ventana 12 h (F3)
+  pending_regularization --> definitive_unpaid: fin ventana 24 h (F3)
   paid --> [*]
   definitive_unpaid --> [*]
 ```
@@ -288,7 +288,7 @@ fallido deja `audit_log` `payout.release_failed` (fuera de la transacción).
 | `deadline_local_time`            | `18:00`         | A6 (F2/F3). Ya va en el snapshot.     |
 | `default_timezone`               | `Europe/Madrid` | `reservations.timezone`.              |
 | `available_after_checkout_hours` | `24`            | A19 (F4).                             |
-| `regularization_window_hours`    | `12`            | A7 (F3).                              |
+| `regularization_window_hours`    | `24`            | A7 (F3).                              |
 | `payout_failure_days`            | `7`             | A22 (F4).                             |
 
 `PlatformSettingsService` cachea en memoria (`PLATFORM_SETTINGS_CACHE_TTL_MS`); valores inválidos

@@ -4,12 +4,28 @@ import type { RefundResponsible } from "../domain/refund-state-machine";
 import type { PaymentEntity } from "../entities/payment.entity";
 import type { RefundEntity } from "../entities/refund.entity";
 
-import { Injectable } from "@nestjs/common";
-import { EntityManager } from "typeorm";
+import { Injectable, Logger, Optional } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { EntityManager, Repository } from "typeorm";
 
 import { envs } from "../../shared/configs/envs";
+import { SiteSettingsEntity } from "../../site-wizard/entities/site-settings.entity";
+import {
+  buildQuoteCancellationSummary,
+  type CancellationPolicyDefinition,
+  cancellationPolicyFromColumns,
+  CHARGE_MODE,
+  type ChargeMode,
+  type ChargePlan,
+  type QuoteCancellationSummary,
+  resolveEffectiveChargePlan,
+  validTimezoneOrNull,
+} from "../domain/cancellation-policy";
 import { computePlatformFee, type PlatformFee } from "../domain/commission";
-import { PAYMENT_STATUS } from "../domain/payment-state-machine";
+import {
+  PAYMENT_STATUS,
+  type PaymentStatus,
+} from "../domain/payment-state-machine";
 import {
   payoutStateMachine,
   type PayoutStatus,
@@ -21,6 +37,7 @@ import {
 import {
   buildReservationSnapshotPayload,
   type SnapshotBoard,
+  type SnapshotCancellationTerms,
   type SnapshotF2Extension,
   type SnapshotRoom,
 } from "../domain/reservation-snapshot";
@@ -44,8 +61,34 @@ import { ReservationSnapshotService } from "./reservation-snapshot.service";
 export interface FrozenTerms {
   commissionRate: number;
   currency: string;
+  /** site_settings.timezone ?? platform default_timezone. */
   timezone: string;
   deadlineLocalTime: string;
+  /**
+   * Structured policy of the site (wizard step 6). null/absent = legacy
+   * 24 h rule (immediate charge, legacy snapshot rule).
+   */
+  cancellationPolicy?: CancellationPolicyDefinition | null;
+  /** platform_settings.deferred_charge_enabled (A5). */
+  deferredChargeEnabled?: boolean;
+  /** platform_settings.deferred_min_lead_hours (A6). */
+  deferredMinLeadHours?: number;
+  /** Booking instant the charge plan was computed at (ISO). */
+  bookedAtIso?: string;
+  /**
+   * Effective charge plan (resolveEffectiveChargePlan) for the stay; null
+   * without policy or without a stay (checkin) to compute it for.
+   */
+  chargePlan?: ChargePlan | null;
+}
+
+/** Stay the frozen terms are resolved for (site policy + charge plan). */
+export interface FrozenTermsStay {
+  siteId: number;
+  /** YYYY-MM-DD */
+  checkin: string;
+  /** Booking instant (default: now). */
+  now?: Date;
 }
 
 export interface FrozenReservationFields {
@@ -54,6 +97,7 @@ export interface FrozenReservationFields {
   total_cents: number;
   currency: string;
   timezone: string;
+  charge_mode: ChargeMode;
 }
 
 export interface NewReservationEconomics {
@@ -116,6 +160,60 @@ export function freezeReservationFields(
     total_cents: amounts.total_cents,
     currency: terms.currency,
     timezone: terms.timezone,
+    // flexible only when the platform enabled the deferred charge (the plan
+    // is already downgraded otherwise); no policy -> immediate (legacy).
+    charge_mode: terms.chargePlan?.charge_mode ?? CHARGE_MODE.IMMEDIATE,
+  };
+}
+
+/**
+ * Quote `cancellation` block from the frozen terms of the stay. null for a
+ * legacy site (no structured policy) or terms resolved without a stay.
+ */
+export function quoteCancellationFromTerms(
+  terms: FrozenTerms,
+  totalCents: number,
+): QuoteCancellationSummary | null {
+  const policy = terms.cancellationPolicy ?? null;
+  const plan = terms.chargePlan ?? null;
+  if (!policy || !plan) {
+    return null;
+  }
+  return buildQuoteCancellationSummary({
+    policy,
+    plan,
+    timezone: terms.timezone,
+    total_cents: totalCents,
+  });
+}
+
+/** Structured snapshot terms (null = legacy rule). */
+export function snapshotCancellationTerms(
+  terms: FrozenTerms,
+  reservation: Pick<ReservationEntity, "charge_mode" | "created_at">,
+): SnapshotCancellationTerms | null {
+  const policy = terms.cancellationPolicy ?? null;
+  if (!policy) {
+    return null;
+  }
+  const plan = terms.chargePlan ?? null;
+  const chargeMode: ChargeMode =
+    reservation.charge_mode === CHARGE_MODE.FLEXIBLE
+      ? CHARGE_MODE.FLEXIBLE
+      : CHARGE_MODE.IMMEDIATE;
+  const createdAt =
+    reservation.created_at instanceof Date &&
+    Number.isFinite(reservation.created_at.getTime())
+      ? reservation.created_at.toISOString()
+      : null;
+  return {
+    policy,
+    booked_at_iso: terms.bookedAtIso ?? createdAt ?? new Date().toISOString(),
+    charge_mode: chargeMode,
+    charge_at_iso:
+      chargeMode === CHARGE_MODE.FLEXIBLE
+        ? (plan?.charge_at_iso ?? null)
+        : null,
   };
 }
 
@@ -127,22 +225,62 @@ export function freezeReservationFields(
  */
 @Injectable()
 export class ReservationEconomicsService {
+  private readonly logger = new Logger(ReservationEconomicsService.name);
+
   constructor(
     private readonly settings: PlatformSettingsService,
     private readonly priceLines: PriceLinesService,
     private readonly snapshots: ReservationSnapshotService,
     private readonly ledger: PaymentLedgerService,
     private readonly audit: AuditLogService,
+    // Optional so unit fixtures built without it keep the legacy terms.
+    @Optional()
+    @InjectRepository(SiteSettingsEntity)
+    private readonly siteSettings?: Repository<SiteSettingsEntity>,
   ) {}
 
-  /** Read OUTSIDE the transaction (cached settings). */
-  async resolveFrozenTerms(): Promise<FrozenTerms> {
+  /**
+   * Read OUTSIDE the transaction (cached platform settings + one
+   * site_settings row). Without `stay` (or without a site policy) the terms
+   * are the legacy ones: platform timezone, immediate charge.
+   */
+  async resolveFrozenTerms(stay?: FrozenTermsStay): Promise<FrozenTerms> {
     const settings = await this.settings.getAll();
+    const now = stay?.now ?? new Date();
+    const site =
+      stay && this.siteSettings
+        ? await this.siteSettings.findOne({ where: { site_id: stay.siteId } })
+        : null;
+    const policy = cancellationPolicyFromColumns(site);
+    if (site?.cancellation_policy_type && !policy) {
+      this.logger.warn(
+        `site ${stay?.siteId}: invalid cancellation policy columns; legacy rule applies`,
+      );
+    }
+    const timezone =
+      validTimezoneOrNull(site?.timezone) ?? settings.default_timezone;
+    const chargePlan =
+      policy && stay
+        ? resolveEffectiveChargePlan({
+            policy,
+            checkin: stay.checkin.slice(0, 10),
+            timezone,
+            deadlineLocalTime: settings.deadline_local_time,
+            now,
+            minLeadHours: settings.deferred_min_lead_hours,
+            deferredChargeEnabled: settings.deferred_charge_enabled,
+          })
+        : null;
     return {
       commissionRate: settings.commission_rate,
       currency: reservationCurrency(),
-      timezone: settings.default_timezone,
+      timezone,
       deadlineLocalTime: settings.deadline_local_time,
+      cancellationPolicy: policy,
+      deferredChargeEnabled: settings.deferred_charge_enabled,
+      deferredMinLeadHours: settings.deferred_min_lead_hours,
+      bookedAtIso: now.toISOString(),
+      chargePlan,
     };
   }
 
@@ -206,6 +344,7 @@ export class ReservationEconomicsService {
         source: input.reason,
         commissionBase: "commissionable",
         extension: input.snapshotExtension ?? null,
+        cancellation: snapshotCancellationTerms(input.terms, reservation),
       }),
       manager,
       input.actor,
@@ -313,6 +452,56 @@ export class ReservationEconomicsService {
       },
       actor,
     );
+  }
+
+  /** Fase 4: latest charge row (deferred charge state). */
+  findLatestPayment(manager: EntityManager, reservationId: number) {
+    return this.ledger.findLatestCharge(manager, reservationId);
+  }
+
+  /** Fase 4: state-machine transition of a payment row (audited). */
+  transitionPayment(
+    manager: EntityManager,
+    payment: PaymentEntity,
+    to: PaymentStatus,
+    actor: Actor,
+    patch: Partial<PaymentEntity> = {},
+    options: { onInvalid?: OnInvalid; metadata?: Record<string, unknown> } = {},
+  ) {
+    return this.ledger.transitionPayment(
+      manager,
+      payment,
+      to,
+      actor,
+      patch,
+      options,
+    );
+  }
+
+  /** Fase 4: setup session completed -> payment method_validated. */
+  recordMethodValidated(
+    manager: EntityManager,
+    reservation: ReservationEntity,
+    checkoutSessionId: string,
+    setupIntentId: string,
+    actor: Actor,
+  ) {
+    return this.ledger.recordMethodValidated(
+      manager,
+      {
+        reservationId: reservation.id,
+        amountCents: reservation.total_cents ?? toCents(reservation.total),
+        currency: reservation.currency ?? reservationCurrency(),
+        checkoutSessionId,
+        setupIntentId,
+      },
+      actor,
+    );
+  }
+
+  /** Fase 4: cached platform settings (regularization window, lead hours). */
+  getPlatformSettings() {
+    return this.settings.getAll();
   }
 
   recordPaymentProcessing(

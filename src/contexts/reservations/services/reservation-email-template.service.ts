@@ -11,6 +11,7 @@ import type {
 
 import { Injectable, Logger } from "@nestjs/common";
 
+import { timezoneLabel } from "../../payments/domain/cancellation-policy";
 import { envs } from "../../shared/configs/envs";
 import {
   INCIDENT_MESSAGE_EMAIL,
@@ -99,7 +100,7 @@ export class ReservationEmailTemplateService {
           subject: "Confirmación de reserva",
           intro: "Tu reserva ha sido confirmada.",
           roleLabel: "huésped",
-          extraHtml: this.confirmationBreakdownHtml(payload),
+          extraHtml: this.confirmationBreakdownHtml(payload, "guest"),
         });
       }
 
@@ -109,7 +110,7 @@ export class ReservationEmailTemplateService {
           intro: "Has recibido una nueva reserva.",
           outro: "Revisa la reserva en tu panel.",
           roleLabel: "anfitrión",
-          extraHtml: this.confirmationBreakdownHtml(payload),
+          extraHtml: this.confirmationBreakdownHtml(payload, "host"),
         });
       }
 
@@ -416,6 +417,137 @@ export class ReservationEmailTemplateService {
         });
       }
 
+      case "host_cannot_host_admin": {
+        return dispatch(adminEmail, {
+          subject: "Imposibilidad de alojar comunicada (payout bloqueado)",
+          intro:
+            "El alojamiento comunica que no puede alojar esta reserva. La reserva sigue confirmada y el pago al anfitrión está bloqueado hasta que la revises en la incidencia del backoffice (aprobar = cancelar con reembolso total al viajero; rechazar = la estancia sigue).",
+          roleLabel: "admin",
+          extraHtml: this.noteHtml(payload.note),
+        });
+      }
+
+      case "host_cannot_host_host": {
+        return dispatch(hostEmail, {
+          subject: "Hemos recibido tu aviso de imposibilidad de alojar",
+          intro:
+            "El equipo de viajes4patas revisará tu aviso y se pondrá en contacto con el viajero. La reserva no se cancela automáticamente: sigue confirmada hasta que te confirmemos la resolución.",
+          roleLabel: "anfitrión",
+          extraHtml: this.noteHtml(payload.note),
+        });
+      }
+
+      case "host_cannot_host_cancelled_guest": {
+        const refund = payload.refund_cents ?? 0;
+        return dispatch(guestEmail, {
+          subject: "Tu reserva ha sido cancelada por el alojamiento",
+          intro:
+            refund > 0
+              ? `El alojamiento no puede atender tu estancia y hemos cancelado la reserva. Te devolvemos el importe íntegro (${this.money(refund)}); puede tardar unos días en aparecer en tu cuenta. Sentimos las molestias.`
+              : "El alojamiento no puede atender tu estancia y hemos cancelado la reserva. No se te ha realizado ningún cobro. Sentimos las molestias.",
+          outro: `<p>${this.escapeHtml("Si necesitas ayuda para encontrar otro alojamiento, escríbenos y te ayudamos.")}</p>`,
+          roleLabel: "huésped",
+          extraHtml: this.noteHtml(payload.note),
+        });
+      }
+
+      case "host_cannot_host_cancelled_host": {
+        const refund = payload.refund_cents ?? 0;
+        return dispatch(hostEmail, {
+          subject: "Reserva cancelada por imposibilidad de alojar",
+          intro:
+            refund > 0
+              ? `Hemos cancelado la reserva tras revisar tu aviso y devuelto ${this.money(refund)} al viajero. No recibirás pago por esta reserva y las fechas vuelven a estar disponibles.`
+              : "Hemos cancelado la reserva tras revisar tu aviso. Las fechas vuelven a estar disponibles.",
+          roleLabel: "anfitrión",
+          extraHtml: this.noteHtml(payload.note),
+        });
+      }
+
+      case "host_cannot_host_rejected_host": {
+        return dispatch(hostEmail, {
+          subject: "Tu aviso de imposibilidad de alojar no se ha aprobado",
+          intro:
+            "Hemos revisado tu aviso y la reserva sigue confirmada: el viajero cuenta con su estancia. Si tienes dudas, contacta con el equipo de viajes4patas.",
+          roleLabel: "anfitrión",
+          extraHtml: this.noteHtml(payload.note),
+        });
+      }
+
+      case "deferred_charge_succeeded_traveler": {
+        const amount = payload.amount_cents ?? payload.total_cents ?? 0;
+        return dispatch(guestEmail, {
+          subject: "Cobro de tu reserva realizado",
+          intro: `Hemos cobrado ${this.money(amount)} de tu reserva con la tarjeta que guardaste al reservar. Tu reserva sigue confirmada.`,
+          roleLabel: "huésped",
+        });
+      }
+
+      case "deferred_charge_failed_traveler": {
+        const deadline = this.formatInstant(
+          payload.deadline_at,
+          payload.timezone,
+        );
+        const payUrl = (payload.pay_url ?? "").trim();
+        const link =
+          payUrl === ""
+            ? ""
+            : `<p><a href="${this.escapeHtml(payUrl)}">Pagar reserva</a></p><br>`;
+        return dispatch(guestEmail, {
+          subject: "No hemos podido cobrar tu reserva",
+          intro:
+            "No hemos podido cobrar tu reserva con la tarjeta que guardaste (el banco la ha rechazado o pide una verificación).",
+          extraHtml: link,
+          outro: `<p>${this.escapeHtml(
+            deadline === ""
+              ? "Paga la reserva desde tu panel lo antes posible; si no, se cancelará."
+              : `Tienes hasta el ${deadline} para pagarla desde tu panel. Si no, la reserva se cancelará automáticamente.`,
+          )}</p>`,
+          roleLabel: "huésped",
+        });
+      }
+
+      case "deferred_charge_failed_host": {
+        const deadline = this.formatInstant(
+          payload.deadline_at,
+          payload.timezone,
+        );
+        return dispatch(hostEmail, {
+          subject: "Cobro pendiente de una reserva",
+          intro: `No hemos podido cobrar esta reserva al viajero. Le hemos pedido que la pague${deadline === "" ? "" : ` antes del ${deadline}`}; si no lo hace, se cancelará y las fechas quedarán libres.`,
+          roleLabel: "anfitrión",
+        });
+      }
+
+      case "regularization_expired_traveler": {
+        return dispatch(guestEmail, {
+          subject: "Reserva cancelada por falta de pago",
+          intro:
+            "No hemos recibido el pago de tu reserva dentro del plazo, así que se ha cancelado. No se te ha cobrado nada.",
+          roleLabel: "huésped",
+        });
+      }
+
+      case "regularization_expired_host": {
+        return dispatch(hostEmail, {
+          subject: "Reserva cancelada por falta de pago",
+          intro:
+            "El viajero no ha pagado la reserva dentro del plazo, así que se ha cancelado y las fechas vuelven a estar disponibles.",
+          roleLabel: "anfitrión",
+        });
+      }
+
+      case "deferred_penalty_failed_admin": {
+        const amount = payload.amount_cents ?? 0;
+        const err = (payload.error_message ?? "").trim();
+        return dispatch(adminEmail, {
+          subject: "Penalización de cancelación no cobrada",
+          intro: `El viajero ha cancelado una reserva con cobro diferido fuera del plazo gratuito y no se ha podido cobrar la penalización de ${this.money(amount)}. Se ha abierto una incidencia.`,
+          roleLabel: "admin",
+          extraHtml: err === "" ? "" : `<p>${this.escapeHtml(err)}</p><br>`,
+        });
+      }
+
       default: {
         return null;
       }
@@ -682,7 +814,11 @@ export class ReservationEmailTemplateService {
    * F2: dogs, price breakdown by lines and deposit info (B6/B7, A26).
    * Empty for legacy reservations without a snapshot.
    */
-  confirmationBreakdownHtml(payload: ReservationEmailPayload): string {
+  confirmationBreakdownHtml(
+    payload: ReservationEmailPayload,
+    audience: "guest" | "host" = "guest",
+  ): string {
+    const chargePending = payload.charge_pending === true;
     let html = "";
     const dogs = payload.dogs ?? [];
     if (dogs.length > 0) {
@@ -711,7 +847,10 @@ export class ReservationEmailTemplateService {
         html += `<tr><td>${this.escapeHtml(label + optional)}</td><td style="text-align:right"><strong>${this.escapeHtml(this.money(line.amount_cents))}</strong></td></tr>`;
       }
       if (payload.total_cents !== undefined) {
-        html += `<tr><td><strong>Total pagado</strong></td><td style="text-align:right"><strong>${this.escapeHtml(this.money(payload.total_cents))}</strong></td></tr>`;
+        const totalLabel = chargePending
+          ? "Total de la reserva"
+          : "Total pagado";
+        html += `<tr><td><strong>${totalLabel}</strong></td><td style="text-align:right"><strong>${this.escapeHtml(this.money(payload.total_cents))}</strong></td></tr>`;
       }
       html += "</table><br>";
     }
@@ -719,7 +858,52 @@ export class ReservationEmailTemplateService {
     if (deposit?.required && deposit.message) {
       html += `<p><strong>${this.escapeHtml("Fianza")}</strong><br>${this.escapeHtml(deposit.message)}</p><br>`;
     }
+    if (chargePending) {
+      html += `<p>${this.escapeHtml(this.deferredChargeNote(payload, audience))}</p><br>`;
+    }
+    const cribsCount = payload.cribs_count ?? 0;
+    if (cribsCount > 0) {
+      html += `<p><strong>${this.escapeHtml("Cunas solicitadas")}</strong><br>${this.escapeHtml(String(cribsCount))}</p><br>`;
+    }
+    const scheduleText = (payload.schedule_text ?? "").trim();
+    if (scheduleText !== "") {
+      html += `<p><strong>${this.escapeHtml("Horario")}</strong><br>${this.escapeHtml(scheduleText)}</p><br>`;
+    }
+    const policyText = (payload.policy_text ?? "").trim();
+    if (policyText !== "") {
+      html += `<p><strong>${this.escapeHtml("Política de cancelación")}</strong><br>${this.escapeHtml(policyText)}</p><br>`;
+    }
     return html;
+  }
+
+  /**
+   * Fase 5: a flexible reservation is confirmed with a saved card and
+   * nothing charged. The note says when the deferred charge happens, in the
+   * site timezone ("hora de Madrid").
+   */
+  private deferredChargeNote(
+    payload: ReservationEmailPayload,
+    audience: "guest" | "host",
+  ): string {
+    const amountCents =
+      payload.amount_cents ??
+      payload.total_cents ??
+      Math.round((payload.total ?? 0) * 100);
+    const amount = this.money(amountCents);
+    const chargeAtMs = payload.charge_at
+      ? new Date(payload.charge_at).getTime()
+      : Number.NaN;
+    const dueNow =
+      !Number.isFinite(chargeAtMs) || chargeAtMs <= Date.now() + 15 * 60_000;
+    if (dueNow) {
+      return audience === "host"
+        ? `Todavía no se ha cobrado nada al viajero. Se le cobrarán ${amount} en los próximos minutos con la tarjeta que guardó al reservar.`
+        : `Todavía no se ha cobrado nada. Se cobrarán ${amount} en los próximos minutos con la tarjeta que guardaste al reservar.`;
+    }
+    const when = this.formatInstant(payload.charge_at, payload.timezone);
+    return audience === "host"
+      ? `Todavía no se ha cobrado nada al viajero. Se le cobrarán ${amount} el ${when} con la tarjeta que guardó al reservar.`
+      : `Hoy no se ha cobrado nada. Se cobrarán ${amount} el ${when} con la tarjeta que guardaste al reservar.`;
   }
 
   private buildBody(block: ReservationBlock, config: DispatchConfig): string {
@@ -774,6 +958,37 @@ export class ReservationEmailTemplateService {
     html += `Total: <strong>${this.escapeHtml(totalFmt)}</strong><br><br>`;
 
     return { resCode, totalFmt, html };
+  }
+
+  /** Fase 4: "dd/mm/aaaa a las HH:MM (hora de Madrid)" in the site timezone. */
+  private formatInstant(
+    iso: string | undefined,
+    timezone: string | undefined,
+  ): string {
+    if (!iso) {
+      return "";
+    }
+    const date = new Date(iso);
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+    const timeZone = timezone || "Europe/Madrid";
+    try {
+      const parts = new Intl.DateTimeFormat("es-ES", {
+        timeZone,
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      }).formatToParts(date);
+      const part = (type: string) =>
+        parts.find(item => item.type === type)?.value ?? "";
+      return `${part("day")}/${part("month")}/${part("year")} a las ${part("hour")}:${part("minute")} (hora de ${timezoneLabel(timeZone)})`;
+    } catch {
+      return date.toISOString();
+    }
   }
 
   private formatDate(isoDate: string): string {

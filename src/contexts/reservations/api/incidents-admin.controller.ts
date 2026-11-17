@@ -14,12 +14,14 @@ import {
 } from "@nestjs/common";
 
 import { InternalApiKeyGuard } from "../../shared/guards/internal-api-key.guard";
+import { ResolveHostCannotHostDto } from "../dto/host-cannot-host.dto";
 import { ListIncidentsQueryDto } from "../dto/incident-admin.dto";
 import { ResolveNoShowDto } from "../dto/no-show.dto";
 import {
   AddIncidentMessageDto,
   UpdateIncidentStatusDto,
 } from "../dto/reservation-incident.dto";
+import { ReservationHostCannotHostService } from "../services/reservation-host-cannot-host.service";
 import { ReservationIncidentService } from "../services/reservation-incident.service";
 import { ReservationIncidentAdminService } from "../services/reservation-incident-admin.service";
 import { ReservationNoShowService } from "../services/reservation-no-show.service";
@@ -60,6 +62,7 @@ export class IncidentsAdminController {
     private readonly incidentService: ReservationIncidentService,
     private readonly adminService: ReservationIncidentAdminService,
     private readonly noShowService: ReservationNoShowService,
+    private readonly hostCannotHostService: ReservationHostCannotHostService,
   ) {}
 
   /** Inbox: filters + pagination + counters per status. */
@@ -107,6 +110,25 @@ export class IncidentsAdminController {
     @Headers() headers: Record<string, unknown>,
   ) {
     return this.noShowService.resolveByAdmin(
+      incidentId,
+      dto.decision,
+      dto.note,
+      actorFrom(headers),
+    );
+  }
+
+  /**
+   * "Imposibilidad de alojar": V4P approves (cancel + 100 % refund to the
+   * traveler, responsible host) or rejects (stay goes on, payout unblocked).
+   */
+  @Post(":incident_id/host-cannot-host/resolve")
+  @HttpCode(HttpStatus.OK)
+  resolveHostCannotHost(
+    @Param("incident_id", ParseIntPipe) incidentId: number,
+    @Body() dto: ResolveHostCannotHostDto,
+    @Headers() headers: Record<string, unknown>,
+  ) {
+    return this.hostCannotHostService.resolveByAdmin(
       incidentId,
       dto.decision,
       dto.note,

@@ -33,6 +33,15 @@ function matchValue(actual: unknown, expected: unknown): boolean {
       case "isNull": {
         return actual === null || actual === undefined;
       }
+      case "lessThan":
+      case "lessThanOrEqual": {
+        if (actual === null || actual === undefined) {
+          return false;
+        }
+        const left = new Date(actual as Date | string | number).getTime();
+        const right = new Date(value as Date | string | number).getTime();
+        return expected.type === "lessThan" ? left < right : left <= right;
+      }
       default: {
         throw new Error(
           `FakeEntityStore: unsupported operator ${expected.type}`,

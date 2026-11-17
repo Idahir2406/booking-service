@@ -148,6 +148,14 @@ export interface TouristTaxInput {
   description: string;
 }
 
+/** Cot / crib rental of the accommodation (wizard step 4, site_settings.cribs_*). */
+export interface CribSelection {
+  quantity: number;
+  /** 0 = free cribs (no price line, only recorded). */
+  price_cents: Cents;
+  pricing_mode: "per_stay" | "per_night";
+}
+
 export interface ReservationPricingInput {
   stay: PricingStay;
   room: PricingRoom;
@@ -155,6 +163,8 @@ export interface ReservationPricingInput {
   dogSupplement: DogSupplementRule | null;
   services: readonly SelectedService[];
   extras: readonly PricedExtraOption[];
+  /** Paid cribs requested by the traveler (null/0 = none or free). */
+  cribs?: CribSelection | null;
   touristTax?: TouristTaxInput | null;
 }
 
@@ -463,6 +473,37 @@ export function buildReservationPriceLines(
           pricing_mode: extra.pricing_mode,
           price_cents: extra.price_cents,
           guests: stay.guests,
+          nights,
+        },
+      }),
+    );
+  }
+
+  // Cribs (paid only): optional extra, commissionable, never penalized (same
+  // money rules as room extras). Stored as type `extra` with metadata.crib.
+  const cribs = input.cribs ?? null;
+  if (cribs && cribs.quantity > 0 && cribs.price_cents > 0) {
+    const formula = serviceFormula(
+      cribs.pricing_mode,
+      cribs.price_cents,
+      stay,
+      cribs.quantity,
+    );
+    lines.push(
+      line({
+        type: PRICE_LINE_TYPE.EXTRA,
+        description: cribs.quantity > 1 ? `Cunas (${cribs.quantity})` : "Cuna",
+        unit_amount_cents: assertCents(cribs.price_cents),
+        multiplier: formula.multiplier,
+        detail: formula.detail,
+        is_optional: true,
+        is_commissionable: true,
+        is_penalizable: false,
+        metadata: {
+          crib: true,
+          quantity: cribs.quantity,
+          pricing_mode: cribs.pricing_mode,
+          price_cents: cribs.price_cents,
           nights,
         },
       }),

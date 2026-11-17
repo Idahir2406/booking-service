@@ -10,6 +10,7 @@ import {
   missingRequiredErrors,
   parseOptionalUserId,
   parsePublishInput,
+  relaxedItemsFor,
   REVIEW_ITEM,
   REVIEW_ITEMS,
 } from "@/contexts/site-wizard/utils/site-review.utils";
@@ -56,7 +57,7 @@ describe("isPropertyComplete", () => {
 });
 
 describe("buildCompleteness", () => {
-  it("weights: required 2, optional 1 (6 required + 4 optional = 16)", () => {
+  it("weights: required 2, optional 1 (8 required + 4 optional = 20)", () => {
     expect(buildCompleteness(checks(true)).percent).toBe(100);
     expect(buildCompleteness(checks(false)).percent).toBe(0);
 
@@ -65,8 +66,8 @@ describe("buildCompleteness", () => {
     onlyRequired[REVIEW_ITEM.FEATURES] = false;
     onlyRequired[REVIEW_ITEM.DESCRIPTION_LONG] = false;
     onlyRequired[REVIEW_ITEM.STRIPE] = false;
-    // 12 / 16 = 75
-    expect(buildCompleteness(onlyRequired).percent).toBe(75);
+    // 16 / 20 = 80
+    expect(buildCompleteness(onlyRequired).percent).toBe(80);
   });
 
   it("missing required items keep wizard order", () => {
@@ -83,6 +84,53 @@ describe("buildCompleteness", () => {
       "cover_photo: Foto de portada (paso 5)",
       "availability: Disponibilidad configurada (paso 6)",
     ]);
+  });
+});
+
+describe("cancellation_policy item", () => {
+  it("is a required step-6 item placed after availability", () => {
+    const keys = REVIEW_ITEMS.map(item => item.key);
+    expect(keys.indexOf(REVIEW_ITEM.CANCELLATION_POLICY)).toBe(
+      keys.indexOf(REVIEW_ITEM.AVAILABILITY) + 1,
+    );
+    expect(
+      REVIEW_ITEMS.find(item => item.key === REVIEW_ITEM.CANCELLATION_POLICY),
+    ).toEqual({
+      key: "cancellation_policy",
+      step: 6,
+      label: "Política de cancelación",
+      required: true,
+    });
+  });
+
+  it("blocks publishing a new site without a policy", () => {
+    const value = checks(true);
+    value[REVIEW_ITEM.CANCELLATION_POLICY] = false;
+    const missing = missingRequired(
+      buildCompleteness(value, { optional: relaxedItemsFor(false) }),
+    );
+    expect(missing).toEqual([
+      { key: "cancellation_policy", step: 6, label: "Política de cancelación" },
+    ]);
+  });
+
+  it("does not block a site already submitted (legacy rule)", () => {
+    expect(relaxedItemsFor(true)).toEqual([
+      REVIEW_ITEM.CANCELLATION_POLICY,
+      REVIEW_ITEM.SCHEDULE,
+    ]);
+    const value = checks(true);
+    value[REVIEW_ITEM.CANCELLATION_POLICY] = false;
+    const completeness = buildCompleteness(value, {
+      optional: relaxedItemsFor(true),
+    });
+    expect(missingRequired(completeness)).toEqual([]);
+    const item = completeness.items.find(
+      row => row.key === REVIEW_ITEM.CANCELLATION_POLICY,
+    );
+    expect(item).toMatchObject({ required: false, done: false });
+    // 7 required -> 6 (+ the item is optional now): 16 / 17 = 94.1
+    expect(completeness.percent).toBe(94);
   });
 });
 

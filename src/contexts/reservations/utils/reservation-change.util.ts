@@ -16,11 +16,17 @@ import type {
   ReservationEntity,
 } from "../entities/reservation.entity";
 
+import {
+  type CancellationPolicyDefinition,
+  CHARGE_MODE,
+} from "../../payments/domain/cancellation-policy";
 import { summarizePriceLines } from "../../payments/domain/price-lines";
 import { SERVICE_SELECTION_TYPE } from "../../payments/domain/reservation-pricing";
 import {
   buildRefundRule,
   buildReservationSnapshotPayload,
+  buildStructuredRefundRule,
+  type SnapshotRefundRule,
 } from "../../payments/domain/reservation-snapshot";
 import { defineStateMachine } from "../../payments/domain/state-machine";
 import { PRICE_LINE_TYPE } from "../../payments/entities/reservation-price-line.entity";
@@ -180,7 +186,10 @@ export type ChangeKind = (typeof CHANGE_KIND)[keyof typeof CHANGE_KIND];
 export type ChangeEligibilityInput = Pick<
   ReservationEntity,
   "status" | "payment_status" | "checkin"
->;
+> &
+  Partial<
+    Pick<ReservationEntity, "charge_mode" | "regularization_deadline_at">
+  >;
 
 /**
  * Upcoming confirmed and paid reservation (also after a partial refund from a
@@ -194,9 +203,16 @@ export function isChangeEligibleReservation(
   if (reservation.status !== "confirmed") {
     return false;
   }
+  // Fase 4: a confirmed flexible reservation not charged yet can change
+  // (the pending charge follows the new total); not while in regularization.
+  const deferredUnpaid =
+    reservation.charge_mode === "flexible" &&
+    reservation.payment_status === "pending" &&
+    !reservation.regularization_deadline_at;
   if (
     reservation.payment_status !== "paid" &&
-    reservation.payment_status !== "partially_refunded"
+    reservation.payment_status !== "partially_refunded" &&
+    !deferredUnpaid
   ) {
     return false;
   }
@@ -456,7 +472,8 @@ export interface ChangedSnapshotInput {
   reservation: Pick<
     ReservationEntity,
     "commission_rate" | "commission_cents" | "timezone"
-  >;
+  > &
+    Partial<Pick<ReservationEntity, "created_at">>;
   quote: ChangeQuoteInput;
   nights: number;
   pets: number;
@@ -500,21 +517,84 @@ export function buildChangedSnapshotPayload(
     commissionBase: "commissionable",
     extension: input.extension,
   });
+  const frozenPolicy = previousRule.cancellation ?? null;
+  payload.refund_policy = frozenPolicy
+    ? changedStructuredRule(
+        previousRule,
+        frozenPolicy,
+        input.quote.checkin.slice(0, 10),
+        input.previous.timezone ?? input.reservation.timezone ?? null,
+        input.reservation.created_at ?? null,
+      )
+    : changedLegacyRule(previousRule, input.quote.checkin.slice(0, 10));
+  return payload;
+}
+
+/** Legacy 24 h rule: only the deadline follows the new check-in. */
+function changedLegacyRule(
+  previousRule: SnapshotRefundRule,
+  checkin: string,
+): SnapshotRefundRule {
   const rule = buildRefundRule(
-    input.quote.checkin.slice(0, 10),
+    checkin,
     previousRule.deadline_local_time ?? null,
     previousRule.timezone ?? null,
   );
-  payload.refund_policy = {
+  return {
     ...rule,
-    ...(previousRule.cancellation
-      ? { cancellation: structuredClone(previousRule.cancellation) }
-      : {}),
     ...(previousRule.generated_text
       ? { generated_text: previousRule.generated_text }
       : {}),
   };
-  return payload;
+}
+
+const CHANGE_DEFAULT_TIMEZONE = "Europe/Madrid";
+const CHANGE_DEFAULT_DEADLINE_TIME = "18:00";
+
+/**
+ * Structured rule: the FROZEN policy, timezone and local deadline time are
+ * applied to the new check-in (deadline, local date, generated text). The
+ * charge mode / charge_at frozen at booking never change here; for a
+ * partial / non-refundable policy refund_deadline stays the booking instant.
+ */
+function changedStructuredRule(
+  previousRule: SnapshotRefundRule,
+  frozenPolicy: CancellationPolicyDefinition,
+  checkin: string,
+  fallbackTimezone: string | null,
+  createdAt: Date | null,
+): SnapshotRefundRule {
+  const policy = structuredClone(frozenPolicy);
+  const createdAtIso =
+    createdAt instanceof Date && Number.isFinite(createdAt.getTime())
+      ? createdAt.toISOString()
+      : null;
+  const rule = buildStructuredRefundRule({
+    checkin,
+    deadlineLocalTime:
+      previousRule.deadline_local_time ?? CHANGE_DEFAULT_DEADLINE_TIME,
+    timezone:
+      previousRule.timezone ?? fallbackTimezone ?? CHANGE_DEFAULT_TIMEZONE,
+    terms: {
+      policy,
+      booked_at_iso:
+        previousRule.booked_at ?? createdAtIso ?? previousRule.refund_deadline,
+      charge_mode:
+        previousRule.charge_mode === CHARGE_MODE.FLEXIBLE
+          ? CHARGE_MODE.FLEXIBLE
+          : CHARGE_MODE.IMMEDIATE,
+      charge_at_iso: previousRule.charge_at ?? null,
+    },
+  });
+  // Snapshots written before Fase 3 had no charge fields: keep them absent.
+  if (previousRule.charge_mode === undefined) {
+    delete rule.charge_mode;
+    delete rule.charge_at;
+  }
+  if (previousRule.booked_at === undefined && createdAtIso === null) {
+    delete rule.booked_at;
+  }
+  return rule;
 }
 
 // ------------------------------------------------------------- display

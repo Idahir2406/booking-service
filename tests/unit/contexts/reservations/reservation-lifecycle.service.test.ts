@@ -142,7 +142,7 @@ describe("ReservationLifecycleService policy", () => {
     expect(fixture.payoutService.refundInTransaction).not.toHaveBeenCalled();
   });
 
-  it("allows finalization during the stay when refund window has passed", async () => {
+  it("rejects finalization during the stay (finalize is from check-out, not check-in)", async () => {
     vi.setSystemTime(new Date("2026-07-17T12:00:00.000Z"));
     const reservation = createReservation();
     const policy = computeReservationPolicyCapabilities(reservation);
@@ -151,34 +151,38 @@ describe("ReservationLifecycleService policy", () => {
     expect(policy).toMatchObject({
       can_cancel: true,
       can_refund: false,
-      can_finalize: true,
+      can_finalize: false,
+      // 2026-07-20 00:00 Europe/Madrid (CEST, UTC+2)
+      finalize_available_from: "2026-07-19T22:00:00.000Z",
     });
-
-    await fixture.service.finalizeReservation(RESERVATION_ID, SITE_ID);
-
-    expect(
-      fixture.reservationService.releaseRemainingAvailabilityForReservation,
-    ).toHaveBeenCalledOnce();
-  });
-
-  it("rejects finalization before check-in", async () => {
-    vi.setSystemTime(new Date("2026-07-15T23:59:59.999Z"));
-    const fixture = createFixture();
 
     await expect(
       fixture.service.finalizeReservation(RESERVATION_ID, SITE_ID),
     ).rejects.toThrow(
-      new BadRequestException("Cannot finalize before check-in date"),
+      new BadRequestException("Cannot finalize before check-out date"),
     );
-
     expect(fixture.save).not.toHaveBeenCalled();
-    expect(
-      fixture.reservationService.releaseRemainingAvailabilityForReservation,
-    ).not.toHaveBeenCalled();
   });
 
-  it("releases only remaining availability on early finalization and keeps payout held", async () => {
-    vi.setSystemTime(new Date("2026-07-17T12:00:00.000Z"));
+  it("uses the frozen local check-out time when present", () => {
+    const reservation = createReservation({
+      timezone: "Europe/Madrid",
+    });
+    const before = computeReservationPolicyCapabilities(
+      { ...reservation, checkout_until: "11:00" },
+      new Date("2026-07-20T08:59:00.000Z"),
+    );
+    const after = computeReservationPolicyCapabilities(
+      { ...reservation, checkout_until: "11:00" },
+      new Date("2026-07-20T09:00:00.000Z"),
+    );
+
+    expect(before.can_finalize).toBe(false);
+    expect(after.can_finalize).toBe(true);
+  });
+
+  it("releases only remaining availability on finalization and keeps payout held", async () => {
+    vi.setSystemTime(new Date("2026-07-20T09:00:00.000Z"));
     const fixture = createFixture(createReservation({ payout_status: "held" }));
 
     const result = await fixture.service.finalizeReservation(

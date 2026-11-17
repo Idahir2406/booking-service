@@ -73,6 +73,8 @@ const BODY_KEYS = [
   "features",
   "tipserv",
   "tipspec_extra",
+  /** Parsed separately (site-cribs.utils.ts). */
+  "cribs",
 ] as const;
 
 export interface ServicesValidationContext {

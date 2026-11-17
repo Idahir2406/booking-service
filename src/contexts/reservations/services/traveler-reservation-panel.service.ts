@@ -34,6 +34,7 @@ import {
   type SnapshotDeposit,
   type SnapshotDog,
   type SnapshotDogPolicy,
+  type SnapshotSchedule,
   type SnapshotSelectedExtra,
   type SnapshotSelectedService,
   type SnapshotStay,
@@ -45,6 +46,7 @@ import { PriceLinesService } from "../../payments/services/price-lines.service";
 import { ReservationSnapshotService } from "../../payments/services/reservation-snapshot.service";
 import { envs } from "../../shared/configs/envs";
 import { MysqlService } from "../../shared/services/mysql.service";
+import { formatScheduleText } from "../../site-wizard/utils/site-schedule.utils";
 import { TravelerDogsService } from "../../traveler-dogs/services/traveler-dogs.service";
 import { ReservationEntity } from "../entities/reservation.entity";
 import { ReservationDisputeEntity } from "../entities/reservation-dispute.entity";
@@ -283,6 +285,11 @@ export class TravelerReservationPanelService {
       site_address: site
         ? composeSiteAddress({ town: site.poblacio, province: site.provincia })
         : null,
+      cribs: reservation.cribs ?? 0,
+      schedule_text: formatScheduleText(
+        this.snapshotField<SnapshotSchedule>(snapshot, "schedule"),
+        reservation.arrival_time ?? null,
+      ),
       dogs_compatible: resolveDogsCompatible(
         compatibility,
         dogs.length > 0 ? dogs.length : (snapshot?.stay.pets ?? 0),
@@ -525,6 +532,39 @@ export class TravelerReservationPanelService {
       timezone: rule?.timezone ?? reservation.timezone ?? null,
       generated_text: rule?.generated_text ?? null,
       is_structured: !!rule?.cancellation,
+      ...this.buildChargeInfo(reservation),
+    };
+  }
+
+  /** Fase 5: deferred-charge state shown next to the policy (flexible). */
+  private buildChargeInfo(
+    reservation: ReservationEntity,
+  ): Pick<
+    TravelerPolicyDto,
+    | "charge_mode"
+    | "charge_pending"
+    | "charge_at_iso"
+    | "regularization_deadline_iso"
+  > {
+    const flexible = reservation.charge_mode === "flexible";
+    const pending =
+      flexible &&
+      reservation.status === "confirmed" &&
+      reservation.payment_status === "pending";
+    const iso = (value: Date | null | undefined): string | null => {
+      if (!value) {
+        return null;
+      }
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? null : date.toISOString();
+    };
+    return {
+      charge_mode: flexible ? "flexible" : "immediate",
+      charge_pending: pending,
+      charge_at_iso: pending ? iso(reservation.charge_at) : null,
+      regularization_deadline_iso: pending
+        ? iso(reservation.regularization_deadline_at)
+        : null,
     };
   }
 

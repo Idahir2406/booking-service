@@ -32,7 +32,20 @@ export type ReservationEmailType =
   | "no_show_confirmed_guest"
   | "no_show_confirmed_host"
   | "no_show_rejected_guest"
-  | "no_show_rejected_host";
+  | "no_show_rejected_host"
+  // Imposibilidad de alojar (host -> V4P review)
+  | "host_cannot_host_admin"
+  | "host_cannot_host_host"
+  | "host_cannot_host_cancelled_guest"
+  | "host_cannot_host_cancelled_host"
+  | "host_cannot_host_rejected_host"
+  // Fase 4 · deferred charge (flexible reservations)
+  | "deferred_charge_succeeded_traveler"
+  | "deferred_charge_failed_traveler"
+  | "deferred_charge_failed_host"
+  | "regularization_expired_traveler"
+  | "regularization_expired_host"
+  | "deferred_penalty_failed_admin";
 
 /**
  * Punto 9: host-level notices (not tied to one reservation): Stripe could not
@@ -106,6 +119,27 @@ export interface ReservationEmailPayload {
   refund_cents?: number;
   rating?: number;
   refund?: boolean;
+  /** Fase 4: traveler panel link to pay a failed deferred charge. */
+  pay_url?: string;
+  /** Fase 4: regularization deadline (ISO instant). */
+  deadline_at?: string;
+  /** Fase 4: timezone used to show deadline_at (site timezone). */
+  timezone?: string;
+  /** Fase 4: amount charged / to charge, in cents. */
+  amount_cents?: number;
+  /**
+   * Fase 5: generated cancellation-policy text frozen in the snapshot.
+   * Only for structured policies; legacy reservations leave it undefined.
+   */
+  policy_text?: string;
+  /** Check-in / check-out schedule (+ estimated arrival) of the stay. */
+  schedule_text?: string;
+  /** Cribs requested for the stay (paid ones are also a price line). */
+  cribs_count?: number;
+  /** Fase 5: deferred charge still pending (flexible, nothing charged yet). */
+  charge_pending?: boolean;
+  /** Fase 5: ISO instant of the deferred charge (flexible). */
+  charge_at?: string;
   /** F2 confirmation breakdown (only when the reservation has a snapshot). */
   price_lines?: ReservationEmailPriceLine[];
   total_cents?: number;

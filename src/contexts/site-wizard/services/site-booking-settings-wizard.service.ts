@@ -4,6 +4,7 @@ import type {
 } from "../types/site-wizard.types";
 import type {
   BookingSettingsInput,
+  CancellationPolicyInput,
   StoredAvailabilityRule,
 } from "../utils/site-booking.utils";
 
@@ -23,6 +24,7 @@ import {
 } from "@/shared/legacy-db/legacy-tables";
 
 import { AvailabilityEntity } from "@/contexts/availability/entities/availability.entity";
+import { PlatformSettingsService } from "@/contexts/payments/services/platform-settings.service";
 import { RoomEntity } from "@/contexts/rooms/entities/room.entity";
 
 import { SiteSettingsEntity } from "../entities/site-settings.entity";
@@ -31,8 +33,14 @@ import {
   buildAvailabilityDates,
   isAvailabilityConfigured,
   parseBookingSettingsInput,
+  parseCancellationPolicyInput,
+  toCancellationSettings,
   toIsoDate,
 } from "../utils/site-booking.utils";
+import {
+  parseScheduleInput,
+  scheduleFromRow,
+} from "../utils/site-schedule.utils";
 import { SiteWizardService } from "./site-wizard.service";
 
 /** Step reached once "Reservas" (step 6) has been confirmed. */
@@ -65,15 +73,17 @@ export class SiteBookingSettingsWizardService {
     private readonly siteSettingsRepository: Repository<SiteSettingsEntity>,
     @InjectRepository(RoomEntity)
     private readonly roomsRepository: Repository<RoomEntity>,
+    private readonly platformSettings: PlatformSettingsService,
   ) {}
 
   async get(siteId: number): Promise<WizardBookingSettingsPayload> {
     await this.assertSiteExists(siteId);
-    const [settings, roomsCount] = await Promise.all([
+    const [settings, roomsCount, platform] = await Promise.all([
       this.siteSettingsRepository.findOne({ where: { site_id: siteId } }),
       this.roomsRepository.count({
         where: { site_id: siteId, is_active: true },
       }),
+      this.platformSettings.getAll(),
     ]);
     const configured = isAvailabilityConfigured(settings);
     return {
@@ -82,6 +92,13 @@ export class SiteBookingSettingsWizardService {
         mode: configured ? settings.availability_mode : null,
         min_nights: configured ? settings.min_nights : null,
         max_nights: configured ? settings.max_nights : null,
+      },
+      cancellation: toCancellationSettings(settings),
+      schedule: scheduleFromRow(settings),
+      charge_rules: {
+        deferred_charge_enabled: platform.deferred_charge_enabled,
+        deadline_local_time: platform.deadline_local_time,
+        deferred_min_lead_hours: platform.deferred_min_lead_hours,
       },
       rooms_count: roomsCount,
     };
@@ -93,10 +110,18 @@ export class SiteBookingSettingsWizardService {
   ): Promise<WizardBookingSettingsPayload> {
     await this.assertSiteExists(siteId);
     const parsed = parseBookingSettingsInput(body);
-    if (!parsed.ok) {
-      throw new BadRequestException(parsed.errors);
+    const parsedCancellation = parseCancellationPolicyInput(body);
+    const parsedSchedule = parseScheduleInput(body);
+    if (!parsed.ok || !parsedCancellation.ok || !parsedSchedule.ok) {
+      throw new BadRequestException([
+        ...(parsed.ok ? [] : parsed.errors),
+        ...(parsedCancellation.ok ? [] : parsedCancellation.errors),
+        ...(parsedSchedule.ok ? [] : parsedSchedule.errors),
+      ]);
     }
+    const schedule = parsedSchedule.value;
     const input = parsed.value;
+    const cancellation = parsedCancellation.value;
 
     await this.legacyDb.transaction(async manager => {
       await this.lockSite(manager, siteId);
@@ -114,6 +139,24 @@ export class SiteBookingSettingsWizardService {
            max_nights = VALUES(max_nights)`,
         [siteId, input.mode, input.min_nights, input.max_nights],
       );
+      // Absent `cancellation` = stored policy untouched.
+      if (cancellation !== undefined) {
+        await this.saveCancellation(manager, table, siteId, cancellation);
+      }
+      // Absent `schedule` = stored schedule untouched.
+      if (schedule !== undefined) {
+        await manager.query(
+          `UPDATE \`${table}\`
+           SET checkin_from = ?, checkin_until = ?, checkout_until = ?
+           WHERE site_id = ?`,
+          [
+            schedule.checkin_from,
+            schedule.checkin_until,
+            schedule.checkout_until,
+            siteId,
+          ],
+        );
+      }
 
       const rooms = await manager.getRepository(RoomEntity).find({
         where: { site_id: siteId, is_active: true },
@@ -175,6 +218,35 @@ export class SiteBookingSettingsWizardService {
         max_nights: settings.max_nights,
       },
       settings,
+    );
+  }
+
+  private async saveCancellation(
+    manager: EntityManager,
+    table: string,
+    siteId: number,
+    policy: CancellationPolicyInput,
+  ): Promise<void> {
+    await manager.query(
+      `UPDATE \`${table}\`
+       SET cancellation_policy_type = ?,
+           cancellation_deadline_days = ?,
+           cancellation_penalty_type = ?,
+           no_show_policy = ?,
+           grace_after_booking_hours = ?,
+           early_cancellation_weeks = ?,
+           timezone = ?
+       WHERE site_id = ?`,
+      [
+        policy.policy_type,
+        policy.deadline_days,
+        policy.penalty_type,
+        policy.no_show_policy,
+        policy.grace_after_booking_hours,
+        policy.early_cancellation_weeks,
+        policy.timezone,
+        siteId,
+      ],
     );
   }
 

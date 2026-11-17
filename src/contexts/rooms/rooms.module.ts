@@ -1,6 +1,7 @@
 import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 
+import { SiteHistoryModule } from "@/contexts/site-history/site-history.module";
 import { SiteUnitEntity } from "@/contexts/site-unit/entities/site-unit.entity";
 
 import { RoomsController } from "./api/rooms.controller";
@@ -13,6 +14,7 @@ import { RoomsService } from "./services/rooms.service";
 
 @Module({
   imports: [
+    SiteHistoryModule,
     TypeOrmModule.forFeature([
       RoomEntity,
       RoomBoardOptionEntity,

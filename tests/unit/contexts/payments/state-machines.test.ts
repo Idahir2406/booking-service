@@ -28,6 +28,8 @@ describe("payment state machine (B3)", () => {
     [P.PENDING_CHARGE, P.PAID],
     [P.PENDING_CHARGE, P.FAILED],
     [P.METHOD_VALIDATED, P.PENDING_CHARGE],
+    [P.PENDING_CHARGE, P.METHOD_VALIDATED], // Fase 4: setup session completed
+    [P.METHOD_VALIDATED, P.PAID], // Fase 4: paid before charge_at
     [P.PROCESSING, P.PAID],
     [P.PROCESSING, P.FAILED],
     [P.FAILED, P.PAID], // "pagado tras reintento" / payment after expiry

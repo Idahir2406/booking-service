@@ -24,6 +24,7 @@ import { PetPoliciesModule } from "@/contexts/pet-policies/pet-policies.module";
 import { ReservationModule } from "@/contexts/reservations/reservation.module";
 import { RoomsModule } from "@/contexts/rooms/rooms.module";
 import { envs } from "@/contexts/shared/configs/envs";
+import { SiteHistoryModule } from "@/contexts/site-history/site-history.module";
 import { SiteUnitModule } from "@/contexts/site-unit/site-unit.module";
 import { SiteWizardModule } from "@/contexts/site-wizard/site-wizard.module";
 import { SpeciesModule } from "@/contexts/species/species.module";
@@ -78,6 +79,7 @@ import { WebhookModule } from "../contexts/webhook/webhook.module";
     CatalogsModule,
     GeographyModule,
     SiteWizardModule,
+    SiteHistoryModule,
   ],
 })
 export class AppModule {}

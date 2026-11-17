@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 
 import { ReservationEntity } from "../reservations/entities/reservation.entity";
+import { SiteSettingsEntity } from "../site-wizard/entities/site-settings.entity";
 import { AuditLogEntity } from "./entities/audit-log.entity";
 import { PaymentEntity } from "./entities/payment.entity";
 import { PlatformSettingEntity } from "./entities/platform-setting.entity";
@@ -32,6 +33,8 @@ import { ReservationSnapshotService } from "./services/reservation-snapshot.serv
       PaymentEntity,
       RefundEntity,
       AuditLogEntity,
+      // Read-only: structured cancellation policy + timezone of the site.
+      SiteSettingsEntity,
     ]),
   ],
   providers: [

@@ -133,4 +133,11 @@ export class QuoteReservationDto {
   @ValidateNested({ each: true })
   @Type(() => ReservationExtraSelectionDto)
   extras?: ReservationExtraSelectionDto[];
+
+  /** Cribs requested (max = cribs the site offers, checked in the quote). */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(10)
+  cribs?: number;
 }

@@ -85,6 +85,20 @@ export interface TravelerPolicyDto {
   generated_text: string | null;
   /** true only when the snapshot carries refund_policy.cancellation. */
   is_structured: boolean;
+  /** Fase 5: how the reservation is charged ("immediate" for legacy). */
+  charge_mode: "immediate" | "flexible";
+  /**
+   * Fase 5: flexible reservation with nothing charged yet (card saved).
+   * The panel shows the charge date instead of refund math.
+   */
+  charge_pending: boolean;
+  /** Fase 5: ISO instant of the deferred charge while charge_pending. */
+  charge_at_iso: string | null;
+  /**
+   * Fase 5: the off-session charge failed; the traveler can pay until this
+   * ISO instant (null when there is no regularization in progress).
+   */
+  regularization_deadline_iso: string | null;
 }
 
 export interface TravelerPaymentDto {
@@ -178,6 +192,10 @@ export interface TravelerReservationDetailDto {
    * site lookup fails or has no data). Legacy has no street/postcode column.
    */
   site_address: string | null;
+  /** Cribs requested (0 = none). */
+  cribs: number;
+  /** Frozen check-in/out schedule (+ estimated arrival), "" when not set. */
+  schedule_text: string;
   /**
    * §5.2: snapshot.compatibility.compatible when the snapshot carries it and
    * dogs were declared; null for older snapshots. Never recomputed live.
@@ -219,6 +237,12 @@ export interface TravelerCancelPreviewResponseDto extends TravelerCancellationQu
   currency: string;
   /** Snapshot timezone used to show the deadline (fallback Europe/Madrid). */
   timezone: string;
+  /**
+   * Fase 5: flexible reservation with nothing charged yet. paid_cents and
+   * refund_cents are 0 and penalty_cents is what cancelling would CHARGE
+   * (0 = free cancellation, nothing charged).
+   */
+  charge_pending: boolean;
 }
 
 /**

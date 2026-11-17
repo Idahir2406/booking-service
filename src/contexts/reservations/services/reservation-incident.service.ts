@@ -62,6 +62,7 @@ import {
   type IncidentAuthor,
   incidentStateMachine,
   type IncidentType,
+  isHiddenFromTraveler,
   isOpenIncidentStatus,
   isPayoutBlockingIncidentType,
   OPEN_INCIDENT_STATUSES,
@@ -379,6 +380,9 @@ export class ReservationIncidentService {
     if (reservation.user_id !== userId) {
       throw new ForbiddenException("Incident access denied");
     }
+    if (isHiddenFromTraveler(incident)) {
+      throw new NotFoundException(`Incident with id ${incidentId} not found`);
+    }
     return {
       incident: this.toTravelerDto(
         incident,
@@ -436,7 +440,7 @@ export class ReservationIncidentService {
         status: In([...OPEN_INCIDENT_STATUSES]),
       },
     });
-    for (const row of rows) {
+    for (const row of rows.filter(item => !isHiddenFromTraveler(item))) {
       const list = result.get(row.reservation_id) ?? [];
       list.push(row.type);
       result.set(row.reservation_id, list);
@@ -448,10 +452,11 @@ export class ReservationIncidentService {
   async listDtosForReservation(
     reservationId: number,
   ): Promise<TravelerIncidentDto[]> {
-    const incidents = await this.incidentRepository.find({
+    const allIncidents = await this.incidentRepository.find({
       where: { reservation_id: reservationId },
       order: { created_at: "DESC" },
     });
+    const incidents = allIncidents.filter(row => !isHiddenFromTraveler(row));
     if (incidents.length === 0) {
       return [];
     }
@@ -513,6 +518,45 @@ export class ReservationIncidentService {
     return incident;
   }
 
+  /**
+   * Fase 4: system incident for V4P when the cancellation penalty of a
+   * flexible reservation (never charged) could not be charged off-session.
+   * Reuses `charge_issue`; no dispute and no payout block (nothing paid).
+   */
+  async openChargeIssueIncidentInTransaction(
+    manager: EntityManager,
+    input: { reservationId: number; userId: number; description: string },
+  ): Promise<ReservationIncidentEntity> {
+    const repository = manager.getRepository(ReservationIncidentEntity);
+    const incident = await repository.save(
+      repository.create({
+        reservation_id: input.reservationId,
+        user_id: input.userId,
+        type: INCIDENT_TYPE.CHARGE_ISSUE,
+        status: INCIDENT_STATUS.IN_REVIEW,
+        description: input.description,
+        dispute_id: null,
+        blocks_payout: false,
+        resolution_note: null,
+        resolved_at: null,
+      }),
+    );
+    await this.reservationEventService.logEventInTransaction(
+      manager,
+      input.reservationId,
+      "incident_opened",
+      {
+        incident_id: incident.id,
+        type: incident.type,
+        dispute_id: null,
+        blocks_payout: false,
+        payout_transition: null,
+        source: "deferred_penalty_failed",
+      },
+    );
+    return incident;
+  }
+
   // -------------------------------------------------------------- V4P side
 
   /**
@@ -552,6 +596,16 @@ export class ReservationIncidentService {
           (to === INCIDENT_STATUS.RESOLVED || dto.release_hold)
         ) {
           throw new BadRequestException("no_show_requires_no_show_resolve");
+        }
+        // Same for "imposibilidad de alojar": it cancels + refunds only
+        // through POST /incidents/:id/host-cannot-host/resolve.
+        if (
+          incident.type === INCIDENT_TYPE.HOST_CANNOT_HOST &&
+          (to === INCIDENT_STATUS.RESOLVED || dto.release_hold)
+        ) {
+          throw new BadRequestException(
+            "host_cannot_host_requires_host_cannot_host_resolve",
+          );
         }
         let changed: boolean;
         try {
@@ -654,6 +708,12 @@ export class ReservationIncidentService {
       async manager => {
         const row = await this.lockIncident(manager, incidentId);
         this.assertIncidentOpen(row);
+        if (isHiddenFromTraveler(row)) {
+          // The chat emails the traveler, who cannot see this incident yet.
+          throw new BadRequestException(
+            "incident_hidden_from_traveler_use_needs_info",
+          );
+        }
         const message = await this.saveMessage(
           manager,
           row,
@@ -906,6 +966,9 @@ export class ReservationIncidentService {
   ): void {
     if (userId < 1 || incident.user_id !== userId) {
       throw new ForbiddenException("Incident access denied");
+    }
+    if (isHiddenFromTraveler(incident)) {
+      throw new NotFoundException(`Incident with id ${incident.id} not found`);
     }
   }
 

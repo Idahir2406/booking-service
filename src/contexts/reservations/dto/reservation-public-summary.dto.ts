@@ -16,4 +16,15 @@ export class ReservationPublicSummaryDto {
   checkin!: string;
   checkout!: string;
   total!: number | null;
+  /**
+   * Fase 5: cancellation policy text frozen in the snapshot (structured
+   * policies only; null for legacy reservations).
+   */
+  policy_text!: string | null;
+  /** Fase 5: "immediate" (legacy / charged now) or "flexible" (deferred). */
+  charge_mode!: "immediate" | "flexible";
+  /** Fase 5: deferred charge instant while nothing has been charged yet. */
+  charge_at_iso!: string | null;
+  /** Fase 5: site timezone used to show charge_at_iso. */
+  timezone!: string | null;
 }

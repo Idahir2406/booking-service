@@ -8,14 +8,26 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import Stripe from "stripe";
 
 import { Site } from "@/src/types/site.types";
 
+import { actors } from "@/contexts/payments/domain/audit-actor";
+import { SiteAuditService } from "@/contexts/site-history/services/site-audit.service";
+import {
+  SITE_AUDIT_ACTION,
+  SITE_AUDIT_SOURCE,
+} from "@/contexts/site-history/utils/site-change.util";
+
 import { buildStripeLineItems } from "../../payments/domain/stripe-line-items";
 import { expectedChargeCents } from "../../reservations/utils/reservation-amount.util";
-import { resolveCheckoutExpiry } from "../../reservations/utils/reservation-policy.util";
+import {
+  isDeferredUnpaid,
+  isSetupCheckout,
+  resolveCheckoutExpiry,
+} from "../../reservations/utils/reservation-policy.util";
 import { envs } from "../../shared/configs/envs";
 import { MysqlService } from "../../shared/services/mysql.service";
 import { CreateDashboardLinkDto } from "../dto/create-dashboard-link.dto";
@@ -43,6 +55,148 @@ export type StripeRefund = Awaited<
 type StripeRefundCreateParams = NonNullable<
   Parameters<StripeClient["refunds"]["create"]>[0]
 >;
+type StripePaymentIntent = Awaited<
+  ReturnType<StripeClient["paymentIntents"]["create"]>
+>;
+
+/** Fase 4: outcome of an off-session charge (never throws for card errors). */
+export const OFF_SESSION_CHARGE_STATUS = {
+  SUCCEEDED: "succeeded",
+  /** Async settlement: payment_intent.succeeded / payment_failed decide. */
+  PROCESSING: "processing",
+  /** 3DS needed (authentication_required): the traveler must pay on-session. */
+  REQUIRES_ACTION: "requires_action",
+  FAILED: "failed",
+} as const;
+
+export type OffSessionChargeStatus =
+  (typeof OFF_SESSION_CHARGE_STATUS)[keyof typeof OFF_SESSION_CHARGE_STATUS];
+
+/** Why the off-session PaymentIntent is created (PI metadata.purpose). */
+export const OFF_SESSION_PURPOSE = {
+  /** Full deferred charge at charge_at (or earlier, card expiring). */
+  DEFERRED_CHARGE: "deferred_charge",
+  /** Cancellation penalty of a flexible reservation never charged. */
+  CANCELLATION_PENALTY: "cancellation_penalty",
+} as const;
+
+export type OffSessionPurpose =
+  (typeof OFF_SESSION_PURPOSE)[keyof typeof OFF_SESSION_PURPOSE];
+
+export interface OffSessionChargeInput {
+  reservation: Pick<
+    ReservationEntity,
+    | "id"
+    | "stripe_customer_id"
+    | "stripe_payment_method_id"
+    | "total_cents"
+    | "total"
+    | "subtotal"
+    | "commission"
+    | "currency"
+  >;
+  /** Ledger payment attempts counter (idempotency key). */
+  attempt: number;
+  /** Default: expectedChargeCents(reservation). */
+  amountCents?: number;
+  purpose?: OffSessionPurpose;
+}
+
+export interface OffSessionChargeResult {
+  status: OffSessionChargeStatus;
+  paymentIntentId: string | null;
+  amountCents: number;
+  failureCode: string | null;
+  failureMessage: string | null;
+}
+
+/** Card saved by a setup Checkout Session (Fase 4). */
+export interface SavedPaymentMethod {
+  setupIntentId: string;
+  paymentMethodId: string | null;
+  customerId: string | null;
+  /** Last instant the card is valid (end of its expiry month, UTC). */
+  cardExpiresAt: Date | null;
+}
+
+function resolveStripeId(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "object" && value !== null && "id" in value) {
+    const id = (value as { id?: unknown }).id;
+    return typeof id === "string" ? id : null;
+  }
+  return null;
+}
+
+/** End of the card expiry month (exclusive bound, UTC). */
+export function cardExpiryInstant(
+  expYear: number | null | undefined,
+  expMonth: number | null | undefined,
+): Date | null {
+  if (expYear === null || expYear === undefined) {
+    return null;
+  }
+  if (expMonth === null || expMonth === undefined) {
+    return null;
+  }
+  const year = Number(expYear);
+  const month = Number(expMonth);
+  if (!Number.isInteger(year) || !Number.isInteger(month)) {
+    return null;
+  }
+  if (month < 1 || month > 12) {
+    return null;
+  }
+  // Date.UTC(year, month) = first instant of the NEXT month.
+  return new Date(Date.UTC(year, month, 1));
+}
+
+interface StripeErrorLike {
+  type?: string;
+  code?: string;
+  decline_code?: string;
+  message?: string;
+  payment_intent?: { id?: string; status?: string } | null;
+}
+
+/** Card errors of an off-session confirm (StripeCardError, auth required). */
+function asCardError(error: unknown): StripeErrorLike | null {
+  if (typeof error !== "object" || error === null) {
+    return null;
+  }
+  const candidate = error as StripeErrorLike;
+  if (
+    candidate.type === "StripeCardError" ||
+    candidate.code === "authentication_required" ||
+    candidate.code === "card_declined" ||
+    (candidate.payment_intent !== undefined &&
+      candidate.payment_intent !== null)
+  ) {
+    return candidate;
+  }
+  return null;
+}
+
+function mapPaymentIntentStatus(
+  intent: Pick<StripePaymentIntent, "status">,
+): OffSessionChargeStatus {
+  switch (intent.status) {
+    case "succeeded": {
+      return OFF_SESSION_CHARGE_STATUS.SUCCEEDED;
+    }
+    case "processing": {
+      return OFF_SESSION_CHARGE_STATUS.PROCESSING;
+    }
+    case "requires_action": {
+      return OFF_SESSION_CHARGE_STATUS.REQUIRES_ACTION;
+    }
+    default: {
+      return OFF_SESSION_CHARGE_STATUS.FAILED;
+    }
+  }
+}
 
 export interface TransferHostPayoutInput {
   reservationId: number;
@@ -63,6 +217,8 @@ export interface CheckoutSessionState {
   status: string | null;
   url: string | null;
   expires_at: Date;
+  /** "payment" | "setup" (Fase 4: a completed setup session is not a payment). */
+  mode?: string | null;
 }
 
 export interface ReplacementCheckoutSessionInput {
@@ -108,6 +264,7 @@ export class StripeService {
     )
     private readonly reservationService: ReservationService,
     private readonly userProfilesService: UserProfilesService,
+    @Optional() private readonly siteAuditService?: SiteAuditService,
   ) {
     this.stripe = new Stripe(envs.STRIPE_API_KEY, {
       apiVersion: "2026-04-22.dahlia",
@@ -218,6 +375,7 @@ export class StripeService {
         status: session.status ?? null,
         url: session.url ?? null,
         expires_at: new Date(session.expires_at * 1000),
+        mode: session.mode,
       };
     } catch (error) {
       if (isStripeResourceMissing(error)) {
@@ -238,10 +396,10 @@ export class StripeService {
     input: ReplacementCheckoutSessionInput,
   ): Promise<{ url: string | null; session_id: string; expires_at: Date }> {
     const reservation = input.reservation;
-    if (
-      reservation.status !== "pending" ||
-      reservation.payment_status !== "pending"
-    ) {
+    const pendingCheckout =
+      reservation.status === "pending" &&
+      reservation.payment_status === "pending";
+    if (!pendingCheckout && !isDeferredUnpaid(reservation)) {
       throw new BadRequestException(
         `Reservation ${reservation.id} is not pending payment`,
       );
@@ -311,6 +469,35 @@ export class StripeService {
     const amountCents = expectedChargeCents(reservation);
     const customer = await this.createOrGetCustomer(email, reservation.id);
     const webBase = envs.FRONTEND_URL.replace(/\/+$/, "");
+    const successUrl = `${webBase}/reserva-exito?session_id={CHECKOUT_SESSION_ID}&reservation_id=${reservation.id}`;
+    const cancelUrl = `${webBase}/reserva-cancelada?site_id=${reservation.site_id}&reservation_id=${reservation.id}`;
+
+    if (isSetupCheckout(reservation)) {
+      // Fase 4 (A5): nothing is charged now. The card is saved for an
+      // off-session charge at charge_at. `currency` is required in setup
+      // mode with dynamic payment methods (no payment_method_types).
+      return this.stripe.checkout.sessions.create(
+        {
+          mode: "setup",
+          currency: envs.CURRENCY.toLowerCase(),
+          customer: customer.id,
+          metadata: {
+            reservation_id: reservation.id.toString(),
+            charge_mode: "flexible",
+          },
+          setup_intent_data: {
+            metadata: {
+              reservation_id: reservation.id.toString(),
+              total_cents: amountCents.toString(),
+            },
+          },
+          expires_at: expiresAtUnix,
+          success_url: successUrl,
+          cancel_url: cancelUrl,
+        },
+        { idempotencyKey },
+      );
+    }
 
     // F2: one Stripe line item per price line (Spanish names). The builder
     // guarantees SUM(items) === amountCents or falls back to a single item.
@@ -340,8 +527,8 @@ export class StripeService {
         },
         customer: customer.id,
         expires_at: expiresAtUnix,
-        success_url: `${webBase}/reserva-exito?session_id={CHECKOUT_SESSION_ID}&reservation_id=${reservation.id}`,
-        cancel_url: `${webBase}/reserva-cancelada?site_id=${reservation.site_id}&reservation_id=${reservation.id}`,
+        success_url: successUrl,
+        cancel_url: cancelUrl,
         currency: envs.CURRENCY,
         mode: "payment",
       },
@@ -452,6 +639,17 @@ export class StripeService {
       );
       accountId = account.id;
       await this.userProfilesService.saveStripeAccountId(userId, accountId);
+      if (body.site_id !== undefined) {
+        // Never the account id itself (history only says it was linked).
+        await this.siteAuditService?.record({
+          siteId: body.site_id,
+          action: SITE_AUDIT_ACTION.STRIPE_ACCOUNT_LINKED,
+          actor: actors.host(body.site_id),
+          source: SITE_AUDIT_SOURCE.PANEL,
+          after: { linked: true },
+          always: true,
+        });
+      }
     }
 
     const webBase = (envs.BOOKING_WEB_URL ?? envs.FRONTEND_URL).replace(
@@ -594,6 +792,127 @@ export class StripeService {
       },
       { idempotencyKey: stripeIdempotencyKeys.transfer(input.reservationId) },
     );
+  }
+
+  /**
+   * Fase 4: card saved by a setup Checkout Session (payment method +
+   * expiry). The PaymentMethod is expanded so the card expiry is read in
+   * the same call.
+   */
+  async retrieveSavedPaymentMethod(
+    setupIntentId: string,
+  ): Promise<SavedPaymentMethod> {
+    const intent = await this.stripe.setupIntents.retrieve(setupIntentId, {
+      expand: ["payment_method"],
+    });
+    const method = intent.payment_method;
+    const card =
+      typeof method === "object" && method !== null ? method.card : null;
+    return {
+      setupIntentId: intent.id,
+      paymentMethodId: resolveStripeId(method),
+      customerId: resolveStripeId(intent.customer),
+      cardExpiresAt: card
+        ? cardExpiryInstant(card.exp_year, card.exp_month)
+        : null,
+    };
+  }
+
+  /**
+   * Fase 4: off-session charge of the saved card. Card errors
+   * (card_declined, authentication_required, ...) are returned as a result,
+   * never thrown, using the PaymentIntent Stripe attaches to the error.
+   * Any other error (network, API) is thrown so the caller rolls back and
+   * retries with the same idempotency key.
+   */
+  async chargeOffSession(
+    input: OffSessionChargeInput,
+  ): Promise<OffSessionChargeResult> {
+    const reservation = input.reservation;
+    const amountCents = input.amountCents ?? expectedChargeCents(reservation);
+    if (amountCents <= 0) {
+      throw new BadRequestException(
+        `Reservation ${reservation.id} has invalid charge amount`,
+      );
+    }
+    const customer = reservation.stripe_customer_id ?? null;
+    const paymentMethod = reservation.stripe_payment_method_id ?? null;
+    if (!customer || !paymentMethod) {
+      return {
+        status: OFF_SESSION_CHARGE_STATUS.FAILED,
+        paymentIntentId: null,
+        amountCents,
+        failureCode: "payment_method_missing",
+        failureMessage: "No saved payment method",
+      };
+    }
+    try {
+      const intent = await this.stripe.paymentIntents.create(
+        {
+          amount: amountCents,
+          currency: (reservation.currency ?? envs.CURRENCY).toLowerCase(),
+          customer,
+          payment_method: paymentMethod,
+          off_session: true,
+          confirm: true,
+          transfer_group: reservationTransferGroup(reservation.id),
+          metadata: {
+            reservation_id: reservation.id.toString(),
+            total_cents: amountCents.toString(),
+            deferred: "1",
+            purpose: input.purpose ?? OFF_SESSION_PURPOSE.DEFERRED_CHARGE,
+          },
+        },
+        {
+          idempotencyKey: stripeIdempotencyKeys.offsessionCharge(
+            reservation.id,
+            input.attempt,
+          ),
+        },
+      );
+      const status = mapPaymentIntentStatus(intent);
+      let failureCode: string | null = null;
+      if (status === OFF_SESSION_CHARGE_STATUS.FAILED) {
+        failureCode = intent.last_payment_error?.code ?? intent.status;
+      } else if (status === OFF_SESSION_CHARGE_STATUS.REQUIRES_ACTION) {
+        failureCode = "authentication_required";
+      }
+      return {
+        status,
+        paymentIntentId: intent.id,
+        amountCents,
+        failureCode,
+        failureMessage: intent.last_payment_error?.message ?? null,
+      };
+    } catch (error) {
+      const cardError = asCardError(error);
+      if (!cardError) {
+        throw error;
+      }
+      const intent = cardError.payment_intent ?? null;
+      const code = cardError.code ?? cardError.decline_code ?? "card_error";
+      return {
+        status:
+          code === "authentication_required" ||
+          intent?.status === "requires_action"
+            ? OFF_SESSION_CHARGE_STATUS.REQUIRES_ACTION
+            : OFF_SESSION_CHARGE_STATUS.FAILED,
+        paymentIntentId: intent?.id ?? null,
+        amountCents,
+        failureCode: code,
+        failureMessage: cardError.message ?? null,
+      };
+    }
+  }
+
+  /** Fase 4: best effort, after a free cancellation (card no longer needed). */
+  async detachPaymentMethodQuietly(paymentMethodId: string): Promise<boolean> {
+    try {
+      await this.stripe.paymentMethods.detach(paymentMethodId);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   async refundPaymentIntent(

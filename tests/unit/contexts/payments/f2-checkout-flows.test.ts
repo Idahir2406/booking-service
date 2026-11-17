@@ -12,6 +12,7 @@ import { dogPolicy, pricedQuote } from "@/tests/utils/quote";
 
 import { actors } from "@/src/contexts/payments/domain/audit-actor";
 import { PaymentEntity } from "@/src/contexts/payments/entities/payment.entity";
+import { PlatformSettingEntity } from "@/src/contexts/payments/entities/platform-setting.entity";
 import { ReservationPriceLineEntity } from "@/src/contexts/payments/entities/reservation-price-line.entity";
 import { ReservationSnapshotEntity } from "@/src/contexts/payments/entities/reservation-snapshot.entity";
 import {
@@ -21,6 +22,7 @@ import {
 } from "@/src/contexts/reservations/services/reservation.service";
 import { signTravelerToken } from "@/src/contexts/reservations/utils/traveler-token.util";
 import { envs } from "@/src/contexts/shared/configs/envs";
+import { SiteSettingsEntity } from "@/src/contexts/site-wizard/entities/site-settings.entity";
 import { StripeService } from "@/src/contexts/stripe/services/stripe.service";
 
 const SITE_ID = 42;
@@ -41,10 +43,10 @@ const LUNA = { name: "Luna", weight_kg: 8, is_ppp: false };
 
 const exp = () => Math.floor(Date.now() / 1000) + 3600;
 
-const createFixture = () => {
+const createFixture = (options: { withSiteSettings?: boolean } = {}) => {
   const db = new FakeReservationDb();
   db.seedNights(SITE_ID, ROOM_ID, NIGHTS, true);
-  const { economics } = createEconomics(db.store);
+  const { economics } = createEconomics(db.store, options);
   const reservationRepository = {
     manager: {
       transaction: <T>(run: (manager: EntityManager) => Promise<T>) =>
@@ -69,7 +71,9 @@ const createFixture = () => {
   const travelerDogs = {
     findActiveOwnedIds: vi.fn((userId: number, ids: readonly number[]) =>
       Promise.resolve(
-        new Set(userId === 77 ? ids.filter(id => id === 501 || id === 502) : []),
+        new Set(
+          userId === 77 ? ids.filter(id => id === 501 || id === 502) : [],
+        ),
       ),
     ),
   };
@@ -516,5 +520,92 @@ describe("Stripe Checkout Session built from the price lines", () => {
       transfer_group: "reservation_7",
     });
     expect(options.idempotencyKey).toBe("checkout:7");
+  });
+});
+
+const seedPolicy = (
+  fixture: ReturnType<typeof createFixture>,
+  deferred: boolean,
+) => {
+  void fixture.db.store.repository(SiteSettingsEntity).insert({
+    site_id: SITE_ID,
+    cancellation_policy_type: "free_cancellation",
+    cancellation_deadline_days: 7,
+    cancellation_penalty_type: "percent_50",
+    no_show_policy: "same_as_cancellation",
+    grace_after_booking_hours: null,
+    early_cancellation_weeks: null,
+    timezone: "Atlantic/Canary",
+  });
+  void fixture.db.store.repository(PlatformSettingEntity).insert({
+    key: "deferred_charge_enabled",
+    value: deferred ? "true" : "false",
+  });
+};
+
+describe("Fase 3 checkout: structured cancellation policy of the site", () => {
+  it("deferred charge off: immediate charge, structured snapshot in the site timezone", async () => {
+    const fixture = createFixture({ withSiteSettings: true });
+    seedPolicy(fixture, false);
+    fixture.quoteWith({ dogs: [LUNA], policy: freeDogsPolicy() });
+    const result = await fixture.checkout();
+    const reservation = fixture.db.reservations.get(result.reservation_id);
+    expect(reservation).toMatchObject({
+      charge_mode: "immediate",
+      timezone: "Atlantic/Canary",
+    });
+    const [snapshot] = fixture.db.store.rows(ReservationSnapshotEntity);
+    expect(snapshot.payload).toMatchObject({
+      timezone: "Atlantic/Canary",
+      refund_policy: {
+        rule: "structured_cancellation_policy",
+        // 03/05/2027 18:00 Canarias (WEST) = 17:00Z
+        refund_deadline: "2027-05-03T17:00:00.000Z",
+        deadline_local_date: "2027-05-03",
+        deadline_local_time: "18:00",
+        timezone: "Atlantic/Canary",
+        cancellation: { policy_type: "free_cancellation", deadline_days: 7 },
+        charge_mode: "immediate",
+        charge_at: null,
+      },
+    });
+  });
+
+  it("deferred charge on: the reservation is frozen as flexible", async () => {
+    const fixture = createFixture({ withSiteSettings: true });
+    seedPolicy(fixture, true);
+    fixture.quoteWith({ dogs: [LUNA], policy: freeDogsPolicy() });
+    const result = await fixture.checkout();
+    expect(
+      fixture.db.reservations.get(result.reservation_id)?.charge_mode,
+    ).toBe("flexible");
+    const [snapshot] = fixture.db.store.rows(ReservationSnapshotEntity);
+    expect(snapshot.payload).toMatchObject({
+      refund_policy: {
+        charge_mode: "flexible",
+        charge_at: "2027-05-03T17:00:00.000Z",
+      },
+    });
+  });
+
+  it("site without policy: legacy rule and immediate charge (unchanged)", async () => {
+    const fixture = createFixture({ withSiteSettings: true });
+    fixture.quoteWith({ dogs: [LUNA], policy: freeDogsPolicy() });
+    const result = await fixture.checkout();
+    expect(fixture.db.reservations.get(result.reservation_id)).toMatchObject({
+      charge_mode: "immediate",
+      timezone: "Europe/Madrid",
+    });
+    const [snapshot] = fixture.db.store.rows(ReservationSnapshotEntity);
+    expect(snapshot.payload).toMatchObject({
+      refund_policy: {
+        rule: "legacy_host_full_refund_until_24h_before_checkin",
+        window_hours: 24,
+      },
+    });
+    expect(
+      (snapshot.payload as { refund_policy: Record<string, unknown> })
+        .refund_policy.cancellation,
+    ).toBeUndefined();
   });
 });

@@ -19,7 +19,9 @@ import { HostPayoutBlockService } from "../services/host-payout-block.service";
 })
 @UseGuards(InternalApiKeyGuard)
 export class HostPayoutsController {
-  constructor(private readonly hostPayoutBlockService: HostPayoutBlockService) {}
+  constructor(
+    private readonly hostPayoutBlockService: HostPayoutBlockService,
+  ) {}
 
   @Get(":user_id/payout-block")
   getPayoutBlock(@Param("user_id", ParseIntPipe) user_id: number) {

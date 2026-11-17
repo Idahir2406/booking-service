@@ -125,6 +125,19 @@ export interface QuotePricingInput {
   dogServices: readonly PricedServiceOption[];
   additionalServices: readonly PricedServiceOption[];
   roomExtras: readonly PricedExtraOption[];
+  /** Cribs requested by the traveler (0 = none). */
+  cribsRequested?: number;
+  /** Site crib offer (null = no cribs offered). */
+  cribOffer?: CribOffer | null;
+}
+
+/** Crib offer of the site (site_settings.cribs_*), public in the quote. */
+export interface CribOffer {
+  count: number;
+  is_paid: boolean;
+  price_cents: Cents;
+  pricing_mode: "per_stay" | "per_night";
+  note: string | null;
 }
 
 /** Paid option the traveler may add in checkout (with its estimate). */
@@ -166,6 +179,38 @@ export interface QuotePricingOutcome {
   availableServices: AvailableServiceOption[];
   availableExtras: AvailableExtraOption[];
   snapshotExtension: SnapshotF2Extension;
+  /** Crib request problems (not offered / more than available). */
+  cribIssues: string[];
+  /** Cribs actually booked (0 when invalid). */
+  cribs: number;
+}
+
+/** Validates the crib request against the site offer (max per reservation). */
+export function resolveCribs(
+  requested: number | undefined,
+  offer: CribOffer | null | undefined,
+): { cribs: number; issues: string[] } {
+  const quantity = Math.max(0, Math.trunc(Number(requested ?? 0)));
+  if (quantity === 0) {
+    return { cribs: 0, issues: [] };
+  }
+  if (!offer || offer.count < 1) {
+    return {
+      cribs: 0,
+      issues: ["El alojamiento no ofrece cunas."],
+    };
+  }
+  if (quantity > offer.count) {
+    return {
+      cribs: 0,
+      issues: [
+        offer.count === 1
+          ? "El alojamiento solo dispone de 1 cuna."
+          : `El alojamiento solo dispone de ${offer.count} cunas.`,
+      ],
+    };
+  }
+  return { cribs: quantity, issues: [] };
 }
 
 export const DEPOSIT_NOT_CHARGED_NOTE =
@@ -374,6 +419,8 @@ export function assembleQuotePricing(
   const issues: SelectionIssue[] = [];
   const selectedServices = resolveServices(input, dogCount, issues);
   const selectedExtras = resolveExtras(input, issues);
+  const cribResult = resolveCribs(input.cribsRequested, input.cribOffer);
+  const cribOffer = input.cribOffer ?? null;
 
   const supplementRule = input.policy
     ? {
@@ -396,6 +443,14 @@ export function assembleQuotePricing(
     dogSupplement: supplementRule,
     services: selectedServices,
     extras: selectedExtras,
+    cribs:
+      cribOffer && cribResult.cribs > 0 && cribOffer.is_paid
+        ? {
+            quantity: cribResult.cribs,
+            price_cents: cribOffer.price_cents,
+            pricing_mode: cribOffer.pricing_mode,
+          }
+        : null,
     touristTax: null,
   });
 
@@ -508,7 +563,18 @@ export function assembleQuotePricing(
       extras,
       deposit,
       tourist_tax: null,
+      cribs:
+        cribResult.cribs > 0 && cribOffer
+          ? {
+              quantity: cribResult.cribs,
+              is_paid: cribOffer.is_paid,
+              price_cents: cribOffer.is_paid ? cribOffer.price_cents : 0,
+              pricing_mode: cribOffer.pricing_mode,
+            }
+          : null,
     },
+    cribIssues: cribResult.issues,
+    cribs: cribResult.cribs,
   };
 }
 

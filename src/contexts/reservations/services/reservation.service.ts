@@ -1,9 +1,11 @@
+import type { QuoteCancellationSummary } from "../../payments/domain/cancellation-policy";
 import type { PriceLinesSummary } from "../../payments/domain/price-lines";
 import type {
   SnapshotBoard,
   SnapshotDeposit,
   SnapshotF2Extension,
   SnapshotRoom,
+  SnapshotSchedule,
 } from "../../payments/domain/reservation-snapshot";
 import type { DogCompatibilityResult } from "../../pet-policies/domain/dog-compatibility";
 import type { UnitPetPolicyEntity } from "../../pet-policies/entities/unit-pet-policy.entity";
@@ -49,6 +51,7 @@ import { paymentKeys } from "../../payments/services/payment-ledger.service";
 import {
   freezeReservationFields,
   type FrozenTerms,
+  quoteCancellationFromTerms,
   ReservationEconomicsService,
 } from "../../payments/services/reservation-economics.service";
 import { centsToDecimal, toCents } from "../../payments/utils/money.util";
@@ -57,6 +60,7 @@ import { RoomExtrasService } from "../../rooms/services/room-extras.service";
 import { RoomsService } from "../../rooms/services/rooms.service";
 import { envs } from "../../shared/configs/envs";
 import { MysqlService } from "../../shared/services/mysql.service";
+import { parseArrivalTime } from "../../site-wizard/utils/site-schedule.utils";
 import { stripeIdempotencyKeys } from "../../stripe/utils/stripe-idempotency.util";
 import { TravelerDogsService } from "../../traveler-dogs/services/traveler-dogs.service";
 import { CheckoutReservationDto } from "../dto/checkout-reservation.dto";
@@ -68,13 +72,19 @@ import {
   ReservationEntity,
   StatusValue,
 } from "../entities/reservation.entity";
+import { ReservationIncidentEntity } from "../entities/reservation-incident.entity";
+import { canReportHostCannotHost } from "../utils/host-cannot-host.util";
 import { expectedChargeCents } from "../utils/reservation-amount.util";
-import { HostPayoutBlockService } from "./host-payout-block.service";
+import {
+  INCIDENT_TYPE,
+  OPEN_INCIDENT_STATUSES,
+} from "../utils/reservation-incident.util";
 import {
   calcNightsUtc,
   computeReservationPolicyCapabilities,
   formatUtcIsoDate,
   getNightDatesUtc,
+  isDeferredUnpaid,
   isReservationBlockingInventory,
   parseIsoDateAtUtcMidnight,
   resolvePendingTtlMs,
@@ -83,6 +93,7 @@ import {
   assembleQuotePricing,
   type AvailableExtraOption,
   type AvailableServiceOption,
+  type CribOffer,
   type PublicDogPolicySummary,
   type QuotePricingInput,
   type SelectionIssue,
@@ -97,6 +108,7 @@ import {
   TRAVELER_TOKEN_STATUS,
   verifyTravelerToken,
 } from "../utils/traveler-token.util";
+import { HostPayoutBlockService } from "./host-payout-block.service";
 import { ReservationEventService } from "./reservation-event.service";
 import { ReservationQuoteContextService } from "./reservation-quote-context.service";
 
@@ -118,6 +130,12 @@ export const PAYMENT_ACTIVATION_OUTCOME = {
   ALREADY_ACTIVE: "already_active",
   /** payment could not be honoured: full automatic refund issued. */
   REFUNDED: "refunded",
+  /**
+   * Fase 4: confirmed flexible reservation (card saved, deferred charge
+   * failed or not yet due) paid through a normal Checkout Session. Nights
+   * were already blocked by the setup activation.
+   */
+  DEFERRED_PAID: "deferred_paid",
 } as const;
 
 export type PaymentActivationOutcome =
@@ -138,6 +156,55 @@ export interface ActivateFromPaymentResult {
   outcome: PaymentActivationOutcome;
   /** Only for REFUNDED. */
   refundReason?: AutoRefundReason;
+}
+
+export interface ActivateFromSetupInput {
+  reservationId: number;
+  checkoutSessionId: string;
+  setupIntentId: string;
+  /** Checkout Session `customer` (fallback when the SetupIntent has none). */
+  customerId?: string | null;
+  actor?: Actor;
+  now?: Date;
+}
+
+export const SETUP_ACTIVATION_OUTCOME = {
+  /** pending flexible reservation confirmed, nights blocked, card saved. */
+  ACTIVATED: "activated",
+  /** expired hold re-confirmed with the saved card (dates still free). */
+  REACTIVATED: "reactivated",
+  /** replay of an already-applied setup session. */
+  ALREADY_ACTIVE: "already_active",
+  /** dates taken meanwhile: reservation cancelled, nothing was charged. */
+  UNAVAILABLE: "unavailable",
+  /** reservation cancelled/finalized or owned by another session: no-op. */
+  IGNORED: "ignored",
+} as const;
+
+export type SetupActivationOutcome =
+  (typeof SETUP_ACTIVATION_OUTCOME)[keyof typeof SETUP_ACTIVATION_OUTCOME];
+
+export interface ActivateFromSetupResult {
+  reservation: ReservationEntity;
+  outcome: SetupActivationOutcome;
+  /**
+   * The deferred charge must run right away (charge_at already due, or the
+   * card expires before charge_at). charge_at was moved to `now` so the
+   * cron is the fallback if the post-commit charge does not run.
+   */
+  chargeNow: boolean;
+  /** Payment method to detach (best effort) when nothing will be charged. */
+  detachPaymentMethodId?: string | null;
+}
+
+export interface DeferredPaymentInput {
+  paymentIntentId: string;
+  amountCents: number;
+  /** Only when paid through a Checkout Session (regularization). */
+  checkoutSessionId?: string | null;
+  actor: Actor;
+  /** Audit trigger: deferred_charge_cron | regularization_checkout | payment_intent_webhook. */
+  trigger: string;
 }
 
 /** Price line as exposed by the public quote (cents, same lines as checkout). */
@@ -202,6 +269,16 @@ export interface QuoteReservationResult {
   selection_issues?: SelectionIssue[];
   /** Hook: no tourist-tax data source yet (F2 doc). */
   tourist_tax?: null;
+  /**
+   * Fase 3: structured cancellation policy of the site for this stay (text,
+   * deadline in local time, when it is charged). null = legacy site.
+   */
+  cancellation?: QuoteCancellationSummary | null;
+  /** Site check-in / check-out schedule (null = not configured). */
+  schedule?: SnapshotSchedule | null;
+  /** Cribs the site offers (null = none) and how many are booked. */
+  crib_offer?: CribOffer | null;
+  cribs?: number;
   internal?: QuoteInternal;
 }
 
@@ -269,6 +346,22 @@ function toPolicyInput(
   };
 }
 
+/**
+ * Fase 4: `charge_at` of a flexible reservation (the frozen plan's charge
+ * instant). Empty for immediate reservations so legacy payloads are
+ * byte-for-byte unchanged.
+ */
+export function deferredChargeFields(
+  chargeMode: string,
+  terms: Pick<FrozenTerms, "chargePlan">,
+): Partial<Pick<ReservationEntity, "charge_at">> {
+  const chargeAtIso = terms.chargePlan?.charge_at_iso ?? null;
+  if (chargeMode !== "flexible" || !chargeAtIso) {
+    return {};
+  }
+  return { charge_at: new Date(chargeAtIso) };
+}
+
 export interface BuildPricedQuoteInput {
   /** Errors already found (dates, availability, board, host...). */
   errors: string[];
@@ -297,6 +390,7 @@ export function buildPricedQuote(
   for (const issue of outcome.selectionIssues) {
     errors.push(issue.message);
   }
+  errors.push(...outcome.cribIssues);
 
   const { lines, totals } = outcome.pricing;
   const sumOf = (type: string) =>
@@ -355,6 +449,7 @@ export function buildPricedQuote(
     available_services: outcome.availableServices,
     available_extras: outcome.availableExtras,
     selection_issues: outcome.selectionIssues,
+    cribs: outcome.cribs,
     tourist_tax: null,
     internal: {
       lines,
@@ -424,6 +519,12 @@ export interface ExpirePendingOptions {
 
 /** Cron grace so a late checkout.session.completed is not raced by expiry. */
 export const PENDING_EXPIRY_GRACE_MS = 2 * 60 * 1000;
+
+/** Fase 4: expired holds a late setup completion may reactivate. */
+const SETUP_REACTIVATION_REASONS = new Set([
+  "expired",
+  "checkout_session_expired",
+]);
 
 /** Max span accepted by the public calendar endpoint. */
 const PUBLIC_CALENDAR_MAX_DAYS = 400;
@@ -657,9 +758,13 @@ export class ReservationService {
       }
     }
 
-    const [activeExtras, dogContext] = await Promise.all([
+    const [activeExtras, dogContext, terms] = await Promise.all([
       this.roomExtrasService.findActiveExtrasByRoom(dto.room_id),
       this.quoteContext.load(dto.site_id, dto.room_id),
+      this.economics.resolveFrozenTerms({
+        siteId: dto.site_id,
+        checkin: dto.checkin,
+      }),
     ]);
 
     const resolvedBoard =
@@ -675,7 +780,7 @@ export class ReservationService {
     }));
 
     // F2: ONE pure function prices the quote AND the checkout.
-    return buildPricedQuote({
+    const quote = buildPricedQuote({
       errors,
       nights,
       nightlyRate: rate,
@@ -711,8 +816,23 @@ export class ReservationService {
         dogServices: dogContext.dogServices,
         additionalServices: dogContext.additionalServices,
         roomExtras,
+        cribsRequested: dto.cribs ?? 0,
+        cribOffer: dogContext.cribOffer,
       },
     });
+    quote.crib_offer = dogContext.cribOffer;
+    quote.cancellation = quoteCancellationFromTerms(
+      terms,
+      quote.totals?.total_cents ?? 0,
+    );
+    quote.schedule = dogContext.schedule;
+    if (quote.internal) {
+      quote.internal.snapshotExtension = {
+        ...quote.internal.snapshotExtension,
+        schedule: dogContext.schedule,
+      };
+    }
+    return quote;
   }
 
   async checkout(dto: CheckoutReservationDto) {
@@ -724,11 +844,20 @@ export class ReservationService {
       throw new InternalServerErrorException("Quote without pricing data");
     }
 
+    const arrival = parseArrivalTime(dto.arrival_time, quote.schedule ?? null);
+    if (!arrival.ok) {
+      throw new BadRequestException(arrival.errors);
+    }
+
     const travelerUserId = this.resolveTravelerUserId(dto.traveler_token);
 
     // Frozen terms + room data + saved-dog links are read before the insert.
+    // Site policy + charge plan for this stay, computed at booking time.
     const [terms, room, snapshotExtension] = await Promise.all([
-      this.economics.resolveFrozenTerms(),
+      this.economics.resolveFrozenTerms({
+        siteId: dto.site_id,
+        checkin: dto.checkin,
+      }),
       this.loadSnapshotRoom(dto.room_id),
       this.linkSavedDogsToSnapshot(dto, quote.internal, travelerUserId),
     ]);
@@ -876,6 +1005,60 @@ export class ReservationService {
       checkin: reservation.checkin,
       checkout: reservation.checkout,
       total: this.toNullableNumber(reservation.total),
+      ...(await this.publicPolicySummary(reservation)),
+    };
+  }
+
+  /**
+   * Fase 5: policy text + deferred charge for the success page. Never
+   * throws: a missing/legacy snapshot just means no policy block.
+   */
+  private async publicPolicySummary(
+    reservation: ReservationEntity,
+  ): Promise<
+    Pick<
+      ReservationPublicSummaryDto,
+      "policy_text" | "charge_mode" | "charge_at_iso" | "timezone"
+    >
+  > {
+    let policyText: string | null = null;
+    let snapshotTimezone: string | null = null;
+    try {
+      const snapshot = await this.economics.findLatestSnapshot(reservation.id);
+      const rule = (snapshot?.payload.refund_policy ?? null) as {
+        cancellation?: unknown;
+        generated_text?: unknown;
+        timezone?: unknown;
+      } | null;
+      if (
+        rule?.cancellation &&
+        typeof rule.generated_text === "string" &&
+        rule.generated_text.trim() !== ""
+      ) {
+        policyText = rule.generated_text.trim();
+      }
+      if (typeof rule?.timezone === "string" && rule.timezone !== "") {
+        snapshotTimezone = rule.timezone;
+      }
+    } catch (error) {
+      this.logger.warn(
+        `Public summary policy unavailable for reservation ${reservation.id}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const flexible = reservation.charge_mode === "flexible";
+    const chargePending = flexible && reservation.payment_status === "pending";
+    const chargeAt =
+      chargePending && reservation.charge_at
+        ? new Date(reservation.charge_at)
+        : null;
+    return {
+      policy_text: policyText,
+      charge_mode: flexible ? "flexible" : "immediate",
+      charge_at_iso:
+        chargeAt && !Number.isNaN(chargeAt.getTime())
+          ? chargeAt.toISOString()
+          : null,
+      timezone: snapshotTimezone ?? reservation.timezone ?? null,
     };
   }
 
@@ -976,7 +1159,10 @@ export class ReservationService {
     await this.getSiteById(createReservationDto.site_id);
 
     const [terms, room] = await Promise.all([
-      this.economics.resolveFrozenTerms(),
+      this.economics.resolveFrozenTerms({
+        siteId: createReservationDto.site_id,
+        checkin: createReservationDto.checkin,
+      }),
       this.loadSnapshotRoom(createReservationDto.room_id),
     ]);
     // Legacy contract: charged amount = subtotal + commission (surcharge).
@@ -997,9 +1183,9 @@ export class ReservationService {
       {
         ...createReservationDto,
         ...frozen,
+        ...deferredChargeFields(frozen.charge_mode, terms),
         status: "pending" as StatusValue,
         payment_status: "pending" as PaymentStatusValue,
-        charge_mode: "immediate",
         expiration_date: new Date(
           Date.now() +
             resolvePendingTtlMs(envs.PENDING_RESERVATION_EXPIRATION_TIME),
@@ -1080,7 +1266,7 @@ export class ReservationService {
       {
         site_id: dto.site_id,
         room_id: dto.room_id,
-        charge_mode: "immediate",
+        // charge_mode comes from `frozen` (immediate unless flexible + A5 on).
         board_option_id: quote.board_option?.id,
         board_snapshot:
           quote.board_option === null
@@ -1112,10 +1298,15 @@ export class ReservationService {
         guest_email: dto.guest_email,
         guest_phone: dto.guest_phone,
         guest_notes: dto.guest_notes,
+        arrival_time: dto.arrival_time ?? null,
+        cribs: internal.snapshotExtension.cribs?.quantity ?? 0,
+        checkout_until:
+          internal.snapshotExtension.schedule?.checkout_until ?? null,
         status: "pending",
         payment_status: "pending",
         expiration_date: expirationDate,
         ...frozen,
+        ...deferredChargeFields(frozen.charge_mode, terms),
       },
       this.economicsHook({
         terms,
@@ -1515,6 +1706,23 @@ export class ReservationService {
       }
     }
 
+    const cannotHostPending = new Set<number>();
+    if (activeRows.length > 0) {
+      const openRequests = await this.reservationRepository.manager
+        .getRepository(ReservationIncidentEntity)
+        .find({
+          where: {
+            reservation_id: In(activeRows.map(row => row.id)),
+            type: INCIDENT_TYPE.HOST_CANNOT_HOST,
+            status: In([...OPEN_INCIDENT_STATUSES]),
+          },
+          select: { reservation_id: true },
+        });
+      for (const request of openRequests) {
+        cannotHostPending.add(request.reservation_id);
+      }
+    }
+
     return activeRows.map(row => {
       const subtotal = row.subtotal;
       const nights = Math.max(0, calcNightsUtc(row.checkin, row.checkout));
@@ -1536,6 +1744,10 @@ export class ReservationService {
         can_finalize: policy.can_finalize,
         can_report_no_show: policy.can_report_no_show,
         refund_deadline: policy.refund_deadline,
+        finalize_available_from: policy.finalize_available_from,
+        cannot_host_pending: cannotHostPending.has(row.id),
+        can_report_cannot_host:
+          !cannotHostPending.has(row.id) && canReportHostCannotHost(row, now),
       };
     });
   }
@@ -1635,8 +1847,11 @@ export class ReservationService {
       });
       if (
         !reservation ||
-        reservation.status !== "pending" ||
-        reservation.payment_status !== "pending"
+        !(
+          (reservation.status === "pending" &&
+            reservation.payment_status === "pending") ||
+          isDeferredUnpaid(reservation)
+        )
       ) {
         return false;
       }
@@ -1767,6 +1982,22 @@ export class ReservationService {
       );
     }
 
+    if (isDeferredUnpaid(reservation) && input.paymentIntentId) {
+      // Fase 4: regularization (or early) payment of a confirmed flexible
+      // reservation. Its nights are already blocked: never re-claimed.
+      const saved = await this.applyDeferredPayment(manager, reservation, {
+        paymentIntentId: input.paymentIntentId,
+        amountCents: input.amountPaidCents,
+        checkoutSessionId: input.checkoutSessionId,
+        actor: input.actor ?? actors.stripe(),
+        trigger: "regularization_checkout",
+      });
+      return {
+        reservation: saved,
+        outcome: PAYMENT_ACTIVATION_OUTCOME.DEFERRED_PAID,
+      };
+    }
+
     if (reservation.status === "pending") {
       const nights = await this.tryClaimNightsForPayment(manager, reservation);
       if (!nights) {
@@ -1840,6 +2071,263 @@ export class ReservationService {
       input,
       AUTO_REFUND_REASON.INVALID_STATE,
     );
+  }
+
+  /**
+   * Fase 4: applies a completed setup Checkout Session (card saved, nothing
+   * charged). MUST run inside the webhook transaction; the row is locked.
+   * - pending flexible -> claim the nights (same rule as a payment), status
+   *   confirmed, legacy payment_status stays "pending", ledger payment
+   *   method_validated, card stored for the off-session charge;
+   * - expired hold whose dates are still free -> reactivated the same way;
+   * - dates gone -> cancelled (nothing to refund: nothing was charged).
+   * chargeNow: charge_at already due or the card expires before it.
+   */
+  async activateFromSetup(
+    input: ActivateFromSetupInput,
+    manager: EntityManager,
+  ): Promise<ActivateFromSetupResult> {
+    const repository = manager.getRepository(ReservationEntity);
+    const reservation = await repository.findOne({
+      where: { id: input.reservationId },
+      lock: { mode: "pessimistic_write" },
+    });
+    if (!reservation) {
+      throw new NotFoundException(
+        `Reservation with id ${input.reservationId} not found`,
+      );
+    }
+    const actor = input.actor ?? actors.stripe();
+    const now = input.now ?? new Date();
+
+    if (reservation.stripe_setup_intent_id === input.setupIntentId) {
+      return {
+        reservation,
+        outcome: SETUP_ACTIVATION_OUTCOME.ALREADY_ACTIVE,
+        chargeNow: false,
+      };
+    }
+
+    const saved = await this.stripeService.retrieveSavedPaymentMethod(
+      input.setupIntentId,
+    );
+
+    const isPending =
+      reservation.status === "pending" &&
+      reservation.payment_status === "pending";
+    const isExpiredHold =
+      reservation.status === "cancelled" &&
+      reservation.payment_status === "pending" &&
+      SETUP_REACTIVATION_REASONS.has(String(reservation.cancel_reason ?? ""));
+    const sessionMatches =
+      !reservation.stripe_checkout_session_id ||
+      reservation.stripe_checkout_session_id === input.checkoutSessionId;
+    if (
+      reservation.charge_mode !== "flexible" ||
+      !sessionMatches ||
+      (!isPending && !isExpiredHold)
+    ) {
+      this.logger.warn(
+        `Setup session ${input.checkoutSessionId} ignored for reservation ${reservation.id} (status=${reservation.status}, payment_status=${reservation.payment_status})`,
+      );
+      return {
+        reservation,
+        outcome: SETUP_ACTIVATION_OUTCOME.IGNORED,
+        chargeNow: false,
+        detachPaymentMethodId: saved.paymentMethodId,
+      };
+    }
+
+    const nights = isPending
+      ? await this.tryClaimNightsForPayment(manager, reservation)
+      : await this.tryLockNightsForReactivation(manager, reservation);
+    if (!nights) {
+      if (isPending) {
+        reservation.status = "cancelled";
+        reservation.cancelled_at = now;
+        reservation.cancel_reason = "dates_unavailable_after_setup";
+        await repository.save(reservation);
+        await this.releaseNightsIfHeldByReservation(reservation, manager);
+        await this.economics.recordPaymentFailed(
+          manager,
+          reservation.id,
+          "dates_unavailable_after_setup",
+          actor,
+        );
+      }
+      await this.reservationEventService.logEventInTransaction(
+        manager,
+        reservation.id,
+        "setup_dates_unavailable",
+        { checkout_session_id: input.checkoutSessionId },
+      );
+      return {
+        reservation,
+        outcome: SETUP_ACTIVATION_OUTCOME.UNAVAILABLE,
+        chargeNow: false,
+        detachPaymentMethodId: saved.paymentMethodId,
+      };
+    }
+    await this.setNightsAvailability(manager, nights, false);
+
+    const before = {
+      status: reservation.status,
+      payment_status: reservation.payment_status,
+      cancel_reason: reservation.cancel_reason ?? null,
+    };
+    reservation.status = "confirmed";
+    reservation.cancelled_at = null;
+    reservation.cancel_reason = null;
+    reservation.stripe_checkout_session_id = input.checkoutSessionId;
+    reservation.stripe_setup_intent_id = input.setupIntentId;
+    reservation.stripe_customer_id =
+      saved.customerId ?? input.customerId ?? null;
+    reservation.stripe_payment_method_id = saved.paymentMethodId;
+
+    const chargeAtMs = reservation.charge_at
+      ? new Date(reservation.charge_at).getTime()
+      : Number.NaN;
+    const cardExpiresBeforeCharge =
+      saved.cardExpiresAt !== null &&
+      Number.isFinite(chargeAtMs) &&
+      saved.cardExpiresAt.getTime() <= chargeAtMs;
+    const chargeNow =
+      !Number.isFinite(chargeAtMs) ||
+      chargeAtMs <= now.getTime() ||
+      cardExpiresBeforeCharge;
+    if (chargeNow) {
+      reservation.charge_at = now;
+    }
+    const savedReservation = await repository.save(reservation);
+
+    await this.economics.recordMethodValidated(
+      manager,
+      savedReservation,
+      input.checkoutSessionId,
+      input.setupIntentId,
+      actor,
+    );
+    await this.economics.auditReservationChange(
+      manager,
+      reservation.id,
+      "reservation.status_changed",
+      actor,
+      before,
+      {
+        status: savedReservation.status,
+        payment_status: savedReservation.payment_status,
+        charge_at: savedReservation.charge_at?.toISOString() ?? null,
+      },
+      {
+        trigger: "payment_method_validated",
+        checkout_session_id: input.checkoutSessionId,
+        setup_intent_id: input.setupIntentId,
+        charge_now: chargeNow,
+        card_expires_before_charge: cardExpiresBeforeCharge,
+      },
+    );
+    await this.reservationEventService.logEventInTransaction(
+      manager,
+      reservation.id,
+      isPending ? "payment_method_validated" : "reactivated_after_expiry",
+      {
+        checkout_session_id: input.checkoutSessionId,
+        setup_intent_id: input.setupIntentId,
+        charge_now: chargeNow,
+      },
+    );
+    return {
+      reservation: savedReservation,
+      outcome: isPending
+        ? SETUP_ACTIVATION_OUTCOME.ACTIVATED
+        : SETUP_ACTIVATION_OUTCOME.REACTIVATED,
+      chargeNow,
+    };
+  }
+
+  /**
+   * Fase 4: the deferred charge of a confirmed flexible reservation was paid
+   * (off-session PaymentIntent or regularization Checkout). Same effects as
+   * confirmPaid without touching the nights: payment_status paid, PI,
+   * paid_at, payout held, ledger paid, regularization closed. The caller
+   * holds the row lock; `reservation` is that locked row.
+   */
+  async applyDeferredPayment(
+    manager: EntityManager,
+    reservation: ReservationEntity,
+    input: DeferredPaymentInput,
+  ): Promise<ReservationEntity> {
+    const before = {
+      status: reservation.status,
+      payment_status: reservation.payment_status,
+      regularization_deadline_at:
+        reservation.regularization_deadline_at?.toISOString() ?? null,
+    };
+    reservation.payment_status = "paid";
+    await this.economics.transitionPayout(
+      manager,
+      reservation,
+      "held",
+      input.actor,
+      { onInvalid: "ignore", metadata: { trigger: input.trigger } },
+    );
+    reservation.paid_at = new Date();
+    if (input.checkoutSessionId) {
+      reservation.stripe_checkout_session_id = input.checkoutSessionId;
+    }
+    reservation.stripe_payment_intent_id = input.paymentIntentId;
+    reservation.regularization_deadline_at = null;
+    const saved = await manager
+      .getRepository(ReservationEntity)
+      .save(reservation);
+    await this.economics.recordPaymentSucceeded(
+      manager,
+      saved,
+      input.checkoutSessionId ?? null,
+      input.paymentIntentId,
+      input.amountCents,
+      input.actor,
+    );
+    await this.economics.auditReservationChange(
+      manager,
+      reservation.id,
+      "reservation.deferred_charge_paid",
+      input.actor,
+      before,
+      {
+        status: saved.status,
+        payment_status: saved.payment_status,
+        payout_status: saved.payout_status ?? null,
+      },
+      {
+        trigger: input.trigger,
+        payment_intent_id: input.paymentIntentId,
+        amount_cents: input.amountCents,
+      },
+    );
+    await this.reservationEventService.logEventInTransaction(
+      manager,
+      reservation.id,
+      "deferred_charge_paid",
+      {
+        trigger: input.trigger,
+        payment_intent_id: input.paymentIntentId,
+        checkout_session_id: input.checkoutSessionId ?? null,
+        amount_cents: input.amountCents,
+      },
+    );
+    return saved;
+  }
+
+  /** Fase 4: ledger status of the latest charge (null without a row). */
+  async findLatestPaymentStatus(reservationId: number): Promise<string | null> {
+    return this.reservationRepository.manager.transaction(async manager => {
+      const payment = await this.economics.findLatestPayment(
+        manager,
+        reservationId,
+      );
+      return payment?.status ?? null;
+    });
   }
 
   private async confirmPaid(

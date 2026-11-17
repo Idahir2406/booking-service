@@ -9,6 +9,8 @@ export const PLATFORM_SETTING_KEY = {
   AVAILABLE_AFTER_CHECKOUT_HOURS: "available_after_checkout_hours",
   REGULARIZATION_WINDOW_HOURS: "regularization_window_hours",
   PAYOUT_FAILURE_DAYS: "payout_failure_days",
+  DEFERRED_CHARGE_ENABLED: "deferred_charge_enabled",
+  DEFERRED_MIN_LEAD_HOURS: "deferred_min_lead_hours",
 } as const;
 
 export type PlatformSettingKey =
@@ -22,10 +24,14 @@ export interface PlatformSettings {
   default_timezone: string;
   /** A19: hours after checkout before a reservation can be settled. */
   available_after_checkout_hours: number;
-  /** A7: hours to regularize a failed charge. */
+  /** A7: hours to regularize a failed (deferred) charge. */
   regularization_window_hours: number;
   /** A22: days before a failed payout escalates. */
   payout_failure_days: number;
+  /** A5: deferred charge of free-cancellation policies (off by default). */
+  deferred_charge_enabled: boolean;
+  /** A6: below these hours until the deadline the charge is immediate. */
+  deferred_min_lead_hours: number;
 }
 
 /** Code defaults: used when a row is missing or the DB is unreachable. */
@@ -34,8 +40,10 @@ export const PLATFORM_SETTING_DEFAULTS: Readonly<PlatformSettings> = {
   deadline_local_time: "18:00",
   default_timezone: "Europe/Madrid",
   available_after_checkout_hours: 24,
-  regularization_window_hours: 12,
+  regularization_window_hours: 24,
   payout_failure_days: 7,
+  deferred_charge_enabled: false,
+  deferred_min_lead_hours: 48,
 };
 
 /**
@@ -68,6 +76,18 @@ function isValidTimezone(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** "true"/"false"/"1"/"0" (case-insensitive); anything else -> null. */
+function parseBoolean(raw: string): boolean | null {
+  const value = raw.toLowerCase();
+  if (value === "true" || value === "1") {
+    return true;
+  }
+  if (value === "false" || value === "0") {
+    return false;
+  }
+  return null;
 }
 
 function positiveNumber(raw: string): number | null {
@@ -111,9 +131,19 @@ export function parsePlatformSettings(
         }
         break;
       }
+      case PLATFORM_SETTING_KEY.DEFERRED_CHARGE_ENABLED: {
+        const value = parseBoolean(raw);
+        if (value === null) {
+          onInvalid?.(row.key, raw);
+        } else {
+          settings.deferred_charge_enabled = value;
+        }
+        break;
+      }
       case PLATFORM_SETTING_KEY.AVAILABLE_AFTER_CHECKOUT_HOURS:
       case PLATFORM_SETTING_KEY.REGULARIZATION_WINDOW_HOURS:
-      case PLATFORM_SETTING_KEY.PAYOUT_FAILURE_DAYS: {
+      case PLATFORM_SETTING_KEY.PAYOUT_FAILURE_DAYS:
+      case PLATFORM_SETTING_KEY.DEFERRED_MIN_LEAD_HOURS: {
         const value = positiveNumber(raw);
         if (value === null) {
           onInvalid?.(row.key, raw);

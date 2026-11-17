@@ -11,9 +11,17 @@ import { PlatformSettingsService } from "@/src/contexts/payments/services/platfo
 import { PriceLinesService } from "@/src/contexts/payments/services/price-lines.service";
 import { ReservationEconomicsService } from "@/src/contexts/payments/services/reservation-economics.service";
 import { ReservationSnapshotService } from "@/src/contexts/payments/services/reservation-snapshot.service";
+import { SiteSettingsEntity } from "@/src/contexts/site-wizard/entities/site-settings.entity";
 
-/** Real F1 services wired over the in-memory store. */
-export function createEconomics(store: FakeEntityStore) {
+/**
+ * Real F1 services wired over the in-memory store. `withSiteSettings` also
+ * reads the site cancellation policy from the store (Fase 3); without it the
+ * terms are the legacy ones.
+ */
+export function createEconomics(
+  store: FakeEntityStore,
+  options: { withSiteSettings?: boolean } = {},
+) {
   const audit = new AuditLogService(store.repository(AuditLogEntity) as never);
   const settings = new PlatformSettingsService(
     store.repository(PlatformSettingEntity) as never,
@@ -33,6 +41,9 @@ export function createEconomics(store: FakeEntityStore) {
     snapshots,
     ledger,
     audit,
+    options.withSiteSettings
+      ? (store.repository(SiteSettingsEntity) as never)
+      : undefined,
   );
   return { economics, ledger, audit, snapshots, lines, settings };
 }

@@ -351,6 +351,62 @@ describe("TravelerReservationPanelService", () => {
     expect(detail.my_feedback).toBeNull();
   });
 
+  it("Fase 5: legacy/immediate policy carries no deferred-charge info", async () => {
+    const { service, addReservation, addSnapshot } = createFixture();
+    const reservation = await addReservation();
+    await addSnapshot(reservation.id, snapshotPayload(40_000));
+
+    const detail = await service.getDetailForTraveler(OWNER, reservation.id);
+
+    expect(detail.policy).toMatchObject({
+      charge_mode: "immediate",
+      charge_pending: false,
+      charge_at_iso: null,
+      regularization_deadline_iso: null,
+    });
+  });
+
+  it("Fase 5: flexible unpaid exposes charge_at, then the regularization deadline", async () => {
+    const { service, store, addReservation, addSnapshot } = createFixture();
+    const reservation = await addReservation({
+      payment_status: "pending",
+      charge_mode: "flexible",
+      charge_at: new Date("2099-07-09T16:00:00.000Z"),
+      timezone: "Europe/Madrid",
+    });
+    await addSnapshot(reservation.id, snapshotPayload(40_000));
+
+    const detail = await service.getDetailForTraveler(OWNER, reservation.id);
+    expect(detail.policy).toMatchObject({
+      charge_mode: "flexible",
+      charge_pending: true,
+      charge_at_iso: "2099-07-09T16:00:00.000Z",
+      regularization_deadline_iso: null,
+    });
+
+    await store.repository(ReservationEntity).update(
+      { id: reservation.id },
+      { regularization_deadline_at: new Date("2099-07-11T16:00:00.000Z") },
+    );
+    const failed = await service.getDetailForTraveler(OWNER, reservation.id);
+    expect(failed.policy.regularization_deadline_iso).toBe(
+      "2099-07-11T16:00:00.000Z",
+    );
+
+    await store
+      .repository(ReservationEntity)
+      .update(
+        { id: reservation.id },
+        { payment_status: "paid", regularization_deadline_at: null },
+      );
+    const paid = await service.getDetailForTraveler(OWNER, reservation.id);
+    expect(paid.policy).toMatchObject({
+      charge_mode: "flexible",
+      charge_pending: false,
+      charge_at_iso: null,
+    });
+  });
+
   it("detail dogs expose saved_dog_id (nullable) and never photo data", async () => {
     const { service, addReservation, addSnapshot } = createFixture();
     const reservation = await addReservation();

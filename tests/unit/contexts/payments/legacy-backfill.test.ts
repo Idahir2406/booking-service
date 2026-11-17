@@ -160,6 +160,8 @@ describe("platform settings parsing", () => {
       available_after_checkout_hours: 24,
       regularization_window_hours: 6,
       payout_failure_days: 7,
+      deferred_charge_enabled: false,
+      deferred_min_lead_hours: 48,
     });
     expect(invalid).toEqual(["deadline_local_time", "default_timezone"]);
   });

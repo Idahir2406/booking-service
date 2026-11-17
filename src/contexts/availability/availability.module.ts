@@ -3,13 +3,18 @@ import { TypeOrmModule } from "@nestjs/typeorm";
 
 import { AvailabilityEntity } from "@/contexts/availability/entities/availability.entity";
 import { RoomsModule } from "@/contexts/rooms/rooms.module";
+import { SiteHistoryModule } from "@/contexts/site-history/site-history.module";
 
 import { MysqlService } from "../shared/services/mysql.service";
 import { AvailabilityController } from "./api/availability.controller";
 import { AvailabilityService } from "./services/availability.service";
 
 @Module({
-  imports: [TypeOrmModule.forFeature([AvailabilityEntity]), RoomsModule],
+  imports: [
+    TypeOrmModule.forFeature([AvailabilityEntity]),
+    RoomsModule,
+    SiteHistoryModule,
+  ],
   controllers: [AvailabilityController],
   providers: [AvailabilityService, MysqlService],
   exports: [AvailabilityService],

@@ -44,6 +44,7 @@ import {
   isOpenChangeRequestStatus,
   resolveOfferExpiry,
 } from "../utils/reservation-change.util";
+import { isDeferredUnpaid } from "../utils/reservation-policy.util";
 import {
   type BuiltOffer,
   changeError,
@@ -893,6 +894,8 @@ export class ReservationChangeService {
     }
     if (
       delta < 0 &&
+      // Fase 4: unpaid deferred charge -> the lower total is just charged later.
+      !isDeferredUnpaid(reservation) &&
       (!reservation.stripe_payment_intent_id ||
         reservation.payout_status === "released")
     ) {

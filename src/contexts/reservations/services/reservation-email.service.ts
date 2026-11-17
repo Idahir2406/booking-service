@@ -18,11 +18,21 @@ import { Site } from "@/src/types/site.types";
 import { MailQueueService } from "../../mail/mail-queue.service";
 import { ReservationEconomicsService } from "../../payments/services/reservation-economics.service";
 import { envs } from "../../shared/configs/envs";
+import {
+  formatScheduleText,
+  type SiteSchedule,
+} from "../../site-wizard/utils/site-schedule.utils";
 import { ReservationEntity } from "../entities/reservation.entity";
 import { ReservationGuestFeedbackEntity } from "../entities/reservation-guest-feedback.entity";
 import { ReservationEmailTemplateService } from "./reservation-email-template.service";
 
 export type { ReservationEmailType } from "../types/reservation-email.types";
+
+/** Fase 4: «Pagar reserva» link (traveler panel, reservations tab). */
+export function travelerReservationPayUrl(reservationId: number): string {
+  const base = (envs.BOOKING_WEB_URL ?? envs.FRONTEND_URL).replace(/\/+$/, "");
+  return `${base}/mi-perfil-textos?selTab=tv_reservas&res=${reservationId}`;
+}
 
 @Injectable()
 export class ReservationEmailService {
@@ -40,8 +50,9 @@ export class ReservationEmailService {
    * a missing/legacy snapshot just means the classic email.
    */
   private async confirmationDetails(
-    reservationId: number,
+    reservation: ReservationEntity,
   ): Promise<Record<string, unknown>> {
+    const reservationId = reservation.id;
     try {
       const snapshot = await this.economics.findLatestSnapshot(reservationId);
       const payload = snapshot?.payload ?? null;
@@ -75,11 +86,28 @@ export class ReservationEmailService {
             }),
           )
         : [];
+      const refundPolicy = (payload.refund_policy ?? null) as Record<
+        string,
+        unknown
+      > | null;
+      const policyText =
+        refundPolicy?.cancellation &&
+        typeof refundPolicy.generated_text === "string" &&
+        refundPolicy.generated_text.trim() !== ""
+          ? refundPolicy.generated_text.trim()
+          : undefined;
+      const scheduleText = formatScheduleText(
+        (payload.schedule ?? null) as Partial<SiteSchedule> | null,
+        reservation.arrival_time ?? null,
+      );
       return {
         price_lines: lines,
         total_cents: Number(payload.total_cents ?? 0),
         deposit,
         dogs,
+        ...(policyText ? { policy_text: policyText } : {}),
+        ...(scheduleText ? { schedule_text: scheduleText } : {}),
+        ...(reservation.cribs ? { cribs_count: reservation.cribs } : {}),
       };
     } catch (error) {
       this.logger.warn(
@@ -225,7 +253,10 @@ export class ReservationEmailService {
     reservation: ReservationEntity,
     site: Site,
   ): Promise<void> {
-    const details = await this.confirmationDetails(reservation.id);
+    const details = {
+      ...(await this.confirmationDetails(reservation)),
+      ...this.deferredChargeDetails(reservation),
+    };
     await this.sendReservationEmail(
       "payment_confirmed_guest",
       reservation,
@@ -238,6 +269,27 @@ export class ReservationEmailService {
       site,
       details,
     );
+  }
+
+  /**
+   * Fase 5: flexible reservation confirmed with a saved card and nothing
+   * charged yet. The confirmation email says when the charge will happen.
+   */
+  private deferredChargeDetails(
+    reservation: ReservationEntity,
+  ): Record<string, unknown> {
+    if (
+      reservation.charge_mode !== "flexible" ||
+      reservation.payment_status !== "pending" ||
+      !reservation.charge_at
+    ) {
+      return {};
+    }
+    return {
+      charge_pending: true,
+      charge_at: new Date(reservation.charge_at).toISOString(),
+      timezone: reservation.timezone ?? "Europe/Madrid",
+    };
   }
 
   /** @deprecated Use sendPaymentConfirmedEmails */
@@ -462,6 +514,85 @@ export class ReservationEmailService {
       reservation,
       site,
       { admin_email: envs.BOOKING_ADMIN_EMAIL },
+    );
+  }
+
+  /** Fase 4: the off-session deferred charge succeeded. */
+  async sendDeferredChargeSucceededEmail(
+    reservation: ReservationEntity,
+    site: Site,
+    amountCents: number,
+  ): Promise<void> {
+    await this.sendReservationEmail(
+      "deferred_charge_succeeded_traveler",
+      reservation,
+      site,
+      { amount_cents: amountCents },
+    );
+  }
+
+  /**
+   * Fase 4: the deferred charge failed. The traveler gets the panel link to
+   * pay before the regularization deadline; the host is informed.
+   */
+  async sendDeferredChargeFailedEmails(
+    reservation: ReservationEntity,
+    site: Site,
+  ): Promise<void> {
+    const extras = {
+      pay_url: travelerReservationPayUrl(reservation.id),
+      deadline_at: reservation.regularization_deadline_at
+        ? new Date(reservation.regularization_deadline_at).toISOString()
+        : "",
+      timezone: reservation.timezone ?? "Europe/Madrid",
+    };
+    await this.sendReservationEmail(
+      "deferred_charge_failed_traveler",
+      reservation,
+      site,
+      extras,
+    );
+    await this.sendReservationEmail(
+      "deferred_charge_failed_host",
+      reservation,
+      site,
+      extras,
+    );
+  }
+
+  /** Fase 4: regularization window over without payment: cancelled. */
+  async sendRegularizationExpiredEmails(
+    reservation: ReservationEntity,
+    site: Site,
+  ): Promise<void> {
+    await this.sendReservationEmail(
+      "regularization_expired_traveler",
+      reservation,
+      site,
+    );
+    await this.sendReservationEmail(
+      "regularization_expired_host",
+      reservation,
+      site,
+    );
+  }
+
+  /** Fase 4: cancellation penalty could not be charged (incident opened). */
+  async sendDeferredPenaltyFailedAdminEmail(
+    reservation: ReservationEntity,
+    site: Site,
+    amountCents: number,
+    failure: string,
+  ): Promise<void> {
+    await this.sendReservationEmail(
+      "deferred_penalty_failed_admin",
+      reservation,
+      site,
+      {
+        amount_cents: amountCents,
+        error_message: failure,
+        admin_email: envs.BOOKING_ADMIN_EMAIL,
+      },
     );
   }
 

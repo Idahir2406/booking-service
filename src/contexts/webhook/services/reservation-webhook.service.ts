@@ -8,6 +8,7 @@ import { Injectable, Logger } from "@nestjs/common";
 import { EntityManager, Not } from "typeorm";
 
 import { actors } from "../../payments/domain/audit-actor";
+import { PAYMENT_STATUS } from "../../payments/domain/payment-state-machine";
 import {
   isRefundCompleted,
   REFUND_STATUS,
@@ -22,16 +23,32 @@ import { ReservationDisputeEntity } from "../../reservations/entities/reservatio
 import {
   PAYMENT_ACTIVATION_OUTCOME,
   ReservationService,
+  SETUP_ACTIVATION_OUTCOME,
 } from "../../reservations/services/reservation.service";
+import { ReservationDeferredChargeService } from "../../reservations/services/reservation-deferred-charge.service";
 import { ReservationEmailService } from "../../reservations/services/reservation-email.service";
 import { ReservationEventService } from "../../reservations/services/reservation-event.service";
+import { isDeferredUnpaid } from "../../reservations/utils/reservation-policy.util";
 
 interface CheckoutSessionPayload {
   id: string;
   payment_status: string;
+  /** "payment" | "setup" (Fase 4: flexible reservations save the card). */
+  mode?: string | null;
   metadata?: Record<string, string>;
   payment_intent?: string | { id: string } | null;
+  setup_intent?: string | { id: string } | null;
+  customer?: string | { id: string } | null;
   amount_total?: number | null;
+}
+
+interface PaymentIntentPayload {
+  id: string;
+  status?: string;
+  amount?: number | null;
+  amount_received?: number | null;
+  metadata?: Record<string, string> | null;
+  last_payment_error?: { code?: string | null; message?: string | null } | null;
 }
 
 interface ChargeRefundList {
@@ -90,7 +107,16 @@ export class ReservationWebhookService {
     private readonly reservationEmailService: ReservationEmailService,
     private readonly reservationEventService: ReservationEventService,
     private readonly economics: ReservationEconomicsService,
+    // Fase 4 (last so pre-existing fixtures keep their positional args).
+    private readonly deferredChargeService?: ReservationDeferredChargeService,
   ) {}
+
+  private requireDeferredChargeService(): ReservationDeferredChargeService {
+    if (!this.deferredChargeService) {
+      throw new Error("ReservationDeferredChargeService is not available");
+    }
+    return this.deferredChargeService;
+  }
 
   private async lockReservationByPaymentIntent(
     manager: EntityManager,
@@ -110,6 +136,10 @@ export class ReservationWebhookService {
   ): Promise<WebhookHandlerResult> {
     const session = event.data.object as CheckoutSessionPayload;
     const reservationId = reservationIdFromMetadata(session.metadata);
+
+    if (session.mode === "setup") {
+      return this.handleSetupCompleted(event, session, manager, afterCommit);
+    }
 
     if (session.payment_status !== "paid") {
       // Delayed payment methods: wait for async_payment_succeeded.
@@ -175,6 +205,19 @@ export class ReservationWebhookService {
         });
         break;
       }
+      case PAYMENT_ACTIVATION_OUTCOME.DEFERRED_PAID: {
+        afterCommit.push(async () => {
+          const site = await this.reservationService.getSiteById(
+            reservation.site_id,
+          );
+          await this.reservationEmailService.sendDeferredChargeSucceededEmail(
+            reservation,
+            site,
+            session.amount_total ?? 0,
+          );
+        });
+        break;
+      }
       case PAYMENT_ACTIVATION_OUTCOME.REFUNDED: {
         afterCommit.push(async () => {
           const site = await this.reservationService.getSiteById(
@@ -195,6 +238,167 @@ export class ReservationWebhookService {
     }
 
     return { reservationId };
+  }
+
+  /**
+   * Fase 4: checkout.session.completed in `setup` mode (flexible
+   * reservation). Card saved, nothing charged: activateFromSetup confirms
+   * the reservation and claims the nights. Confirmation emails reuse the
+   * payment-confirmed templates (Fase 5 adds the charge date to them).
+   */
+  private async handleSetupCompleted(
+    event: StripeWebhookEvent,
+    session: CheckoutSessionPayload,
+    manager: EntityManager,
+    afterCommit: AfterCommitTask[],
+  ): Promise<WebhookHandlerResult> {
+    const reservationId = reservationIdFromMetadata(session.metadata);
+    if (!reservationId) {
+      this.logger.warn(
+        `Setup session ${session.id} missing metadata.reservation_id`,
+      );
+      return {};
+    }
+    const setupIntentId = resolveId(session.setup_intent);
+    if (!setupIntentId) {
+      throw new Error(`Setup session ${session.id} lacks setup_intent`);
+    }
+    const result = await this.reservationService.activateFromSetup(
+      {
+        reservationId,
+        checkoutSessionId: session.id,
+        setupIntentId,
+        customerId: resolveId(session.customer) ?? null,
+        actor: actors.stripe(event.id),
+      },
+      manager,
+    );
+    const reservation = result.reservation;
+    switch (result.outcome) {
+      case SETUP_ACTIVATION_OUTCOME.ACTIVATED:
+      case SETUP_ACTIVATION_OUTCOME.REACTIVATED: {
+        afterCommit.push(async () => {
+          const site = await this.reservationService.getSiteById(
+            reservation.site_id,
+          );
+          await this.reservationEmailService.sendPaymentConfirmedEmails(
+            reservation,
+            site,
+          );
+        });
+        if (result.chargeNow) {
+          const deferred = this.requireDeferredChargeService();
+          afterCommit.push(async () => {
+            await deferred.chargeReservation(reservation.id);
+          });
+        }
+        break;
+      }
+      case SETUP_ACTIVATION_OUTCOME.UNAVAILABLE:
+      case SETUP_ACTIVATION_OUTCOME.IGNORED: {
+        const deferred = this.deferredChargeService;
+        const paymentMethodId = result.detachPaymentMethodId ?? null;
+        if (deferred && paymentMethodId) {
+          afterCommit.push(() => deferred.detachQuietly(paymentMethodId));
+        }
+        if (result.outcome === SETUP_ACTIVATION_OUTCOME.UNAVAILABLE) {
+          afterCommit.push(async () => {
+            const site = await this.reservationService.getSiteById(
+              reservation.site_id,
+            );
+            await this.reservationEmailService.sendCancelledEmails(
+              reservation,
+              site,
+              false,
+            );
+          });
+        }
+        break;
+      }
+      default: {
+        this.logger.log(
+          `Setup session ${session.id} already applied to reservation ${reservationId}`,
+        );
+      }
+    }
+    return { reservationId };
+  }
+
+  /**
+   * Fase 4: payment_intent.succeeded / payment_intent.payment_failed of an
+   * OFF-SESSION charge (metadata.deferred = "1"). Checkout payments are
+   * settled by checkout.session.* and are ignored here. Idempotent: the
+   * deferred service re-checks the reservation under its row lock.
+   */
+  async handlePaymentIntentEvent(
+    event: StripeWebhookEvent,
+    manager: EntityManager,
+    afterCommit: AfterCommitTask[],
+  ): Promise<WebhookHandlerResult> {
+    const intent = event.data.object as PaymentIntentPayload;
+    const metadata = intent.metadata ?? undefined;
+    if (metadata?.deferred !== "1") {
+      return {};
+    }
+    const reservationId = reservationIdFromMetadata(metadata);
+    if (!reservationId) {
+      this.logger.warn(
+        `Deferred payment_intent ${intent.id} missing metadata.reservation_id`,
+      );
+      return {};
+    }
+    const deferred = this.requireDeferredChargeService();
+    const actor = actors.stripe(event.id);
+    const tasks =
+      event.type === "payment_intent.succeeded"
+        ? await deferred.handleAsyncChargeSucceeded(manager, {
+            reservationId,
+            paymentIntentId: intent.id,
+            amountCents: Number(intent.amount_received ?? intent.amount ?? 0),
+            purpose: metadata.purpose || null,
+            actor,
+          })
+        : await deferred.handleAsyncChargeFailed(manager, {
+            reservationId,
+            paymentIntentId: intent.id,
+            failureCode: intent.last_payment_error?.code ?? null,
+            failureMessage: intent.last_payment_error?.message ?? null,
+            actor,
+          });
+    afterCommit.push(...tasks);
+    return { reservationId };
+  }
+
+  private async reopenRegularization(
+    manager: EntityManager,
+    reservationId: number,
+    checkoutSessionId: string,
+    actor: ReturnType<typeof actors.stripe>,
+  ): Promise<void> {
+    const locked = await manager.getRepository(ReservationEntity).findOne({
+      where: { id: reservationId },
+      lock: { mode: "pessimistic_write" },
+    });
+    if (!locked || !isDeferredUnpaid(locked)) {
+      return;
+    }
+    const payment = await this.economics.recordPaymentFailed(
+      manager,
+      reservationId,
+      "async_payment_failed",
+      actor,
+      checkoutSessionId,
+    );
+    if (payment?.status === PAYMENT_STATUS.FAILED) {
+      await this.economics.transitionPayment(
+        manager,
+        payment,
+        PAYMENT_STATUS.PENDING_REGULARIZATION,
+        actor,
+        {},
+        { onInvalid: "ignore" },
+      );
+    }
   }
 
   /** checkout.session.expired / async_payment_failed: release the hold now. */
@@ -225,6 +429,22 @@ export class ReservationWebhookService {
       reservation.stripe_checkout_session_id !== session.id
     ) {
       // A newer session owns this reservation; this one is irrelevant.
+      return { reservationId };
+    }
+
+    if (
+      isDeferredUnpaid(reservation) &&
+      event.type === "checkout.session.async_payment_failed"
+    ) {
+      // Fase 4: an async regularization payment failed. The reservation
+      // stays confirmed; the payment row goes back to regularization so
+      // expireRegularizations can still cancel it at the deadline.
+      await this.reopenRegularization(
+        manager,
+        reservationId,
+        session.id,
+        actors.stripe(event.id),
+      );
       return { reservationId };
     }
 

@@ -1,3 +1,5 @@
+import type { CribOffer } from "../utils/reservation-quote.util";
+
 import { Injectable, Logger } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
@@ -17,6 +19,10 @@ import {
 } from "../../pet-policies/domain/dog-compatibility";
 import { UnitPetPolicyEntity } from "../../pet-policies/entities/unit-pet-policy.entity";
 import { SiteSettingsEntity } from "../../site-wizard/entities/site-settings.entity";
+import {
+  scheduleFromRow,
+  type SiteSchedule,
+} from "../../site-wizard/utils/site-schedule.utils";
 import { SpeciesEntity } from "../../species/entities/species.entity";
 
 /** V1 = dogs only (C1); same catalog row the wizard uses (step 3). */
@@ -34,6 +40,38 @@ export interface QuoteDogContext {
   dogServices: PricedServiceOption[];
   /** Paid additional services (state yes & is_paid). */
   additionalServices: PricedServiceOption[];
+  /** Check-in / check-out schedule (null = not configured). */
+  schedule: SiteSchedule | null;
+  /** Cribs offered by the site (null = none). */
+  cribOffer: CribOffer | null;
+}
+
+/** site_settings.cribs_* -> public offer (paid needs a price + mode). */
+export function cribOfferFromSettings(
+  settings: SiteSettingsEntity | null,
+): CribOffer | null {
+  if (!settings?.cribs_offered) {
+    return null;
+  }
+  const count = Number(settings.cribs_count ?? 0);
+  if (!Number.isInteger(count) || count < 1) {
+    return null;
+  }
+  const isPaid = Boolean(settings.cribs_is_paid);
+  const priceCents =
+    settings.cribs_price === null ? 0 : toCents(settings.cribs_price);
+  const mode =
+    settings.cribs_pricing_mode === "per_night" ? "per_night" : "per_stay";
+  if (isPaid && priceCents <= 0) {
+    return null;
+  }
+  return {
+    count,
+    is_paid: isPaid,
+    price_cents: isPaid ? priceCents : 0,
+    pricing_mode: mode,
+    note: settings.cribs_note?.trim() ? settings.cribs_note.trim() : null,
+  };
 }
 
 function isSellable(row: {
@@ -115,6 +153,8 @@ export class ReservationQuoteContextService {
       speciesId,
       sizes: normalizeDogSizes(sizes),
       policy,
+      schedule: scheduleFromRow(settings),
+      cribOffer: cribOfferFromSettings(settings),
       siteSettings: settings
         ? {
             max_pets:

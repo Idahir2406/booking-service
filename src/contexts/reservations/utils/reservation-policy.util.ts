@@ -1,11 +1,33 @@
+import { localTimeUtcIso } from "../../payments/domain/cancellation-policy";
+
 export const REFUND_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** Fallback when a reservation has no timezone (legacy rows). */
+export const FINALIZE_DEFAULT_TIMEZONE = "Europe/Madrid";
+
+/**
+ * "Finalizar estancia" closes a stay that already ended (it is NOT a
+ * cancellation): it starts the feedback window and, after it, the host
+ * payout. If the host does not finalize, the system does it this many hours
+ * after the finalize moment (so the payout is never stuck).
+ */
+export const AUTO_FINALIZE_AFTER_HOURS = 48;
 
 export interface ReservationPolicyInput {
   status: string;
   payment_status: string;
+  /** Fase 4: flexible + unpaid confirmed reservations can be cancelled. */
+  charge_mode?: string | null;
   payout_status?: string | null;
   checkin: string;
   checkout: string;
+  /** IANA timezone of the accommodation (reservations.timezone). */
+  timezone?: string | null;
+  /**
+   * Local check-out time "HH:MM" frozen for this reservation (snapshot
+   * schedule). Missing = 00:00 local of the check-out day.
+   */
+  checkout_until?: string | null;
 }
 
 export interface ReservationInventoryHoldInput {
@@ -15,23 +37,53 @@ export interface ReservationInventoryHoldInput {
   expiration_date?: Date | string | null;
 }
 
+export interface DeferredChargeStateInput {
+  status: string;
+  payment_status: string;
+  charge_mode?: string | null;
+}
+
+/** Fase 4: a pending flexible reservation saves the card (Checkout setup mode). */
+export function isSetupCheckout(
+  reservation: Pick<DeferredChargeStateInput, "status" | "charge_mode">,
+): boolean {
+  return (
+    reservation.status === "pending" && reservation.charge_mode === "flexible"
+  );
+}
+
+/**
+ * Fase 4: confirmed flexible reservation whose deferred charge is still
+ * unpaid (card saved, charge not yet due, in flight or in regularization).
+ */
+export function isDeferredUnpaid(
+  reservation: DeferredChargeStateInput,
+): boolean {
+  return (
+    reservation.status === "confirmed" &&
+    reservation.charge_mode === "flexible" &&
+    reservation.payment_status === "pending"
+  );
+}
+
 /**
  * Whether a reservation still blocks inventory / calendar dates.
- * - confirmed / finalized: always
+ * - confirmed / finalized: always — including a confirmed `flexible`
+ *   reservation whose deferred charge is still unpaid (Fase 4: the setup
+ *   session confirmed it and claimed the nights)
  * - paid (any non-cancelled flow): always, expiration ignored
- * - pending unpaid: never (immediate checkout does not hold nights;
- *   `flexible` is reserved and does not hold either)
+ * - pending unpaid: never (neither immediate nor flexible checkout holds
+ *   nights before Stripe confirms the payment / the saved card)
  * - cancelled: never
  */
 export function isReservationBlockingInventory(
   reservation: ReservationInventoryHoldInput,
   now: Date = new Date(),
 ): boolean {
+  // Clock kept in the signature (callers pass it); not needed by the rule.
   void now;
   const status = String(reservation.status || "").toLowerCase();
   const paymentStatus = String(reservation.payment_status || "").toLowerCase();
-  // Clock stays in the signature for a future flexible hold. Unused today.
-  void now;
 
   if (status === "cancelled") {
     return false;
@@ -55,6 +107,8 @@ export interface ReservationPolicyCapabilities {
   /** Punto 6: host may report "No se presentó" (from check-in, payout not blocked). */
   can_report_no_show: boolean;
   refund_deadline: string;
+  /** ISO instant from which the host can finalize the stay. */
+  finalize_available_from: string;
 }
 
 export function parseIsoDateAtUtcMidnight(isoDate: string): Date {
@@ -76,6 +130,52 @@ export function getCheckoutStartUtc(checkout: string): Date {
   return parseIsoDateAtUtcMidnight(checkout);
 }
 
+const LOCAL_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * Instant from which the stay can be finalized: the check-out day at the
+ * accommodation's check-out time (default 00:00) in its local timezone.
+ * Never before check-out: finalizing starts the payout to the host, so a
+ * guest who is still staying must not be "finalized".
+ */
+export function getFinalizeAvailableFromUtc(
+  checkout: string,
+  timezone?: string | null,
+  checkoutUntil?: string | null,
+): Date {
+  const [year, month, day] = checkout.slice(0, 10).split("-").map(Number);
+  const localTime =
+    checkoutUntil && LOCAL_TIME_RE.test(checkoutUntil.slice(0, 5))
+      ? checkoutUntil.slice(0, 5)
+      : "00:00";
+  try {
+    return new Date(
+      localTimeUtcIso(
+        year,
+        month,
+        day,
+        localTime,
+        timezone?.trim() ? timezone : FINALIZE_DEFAULT_TIMEZONE,
+      ),
+    );
+  } catch {
+    // Unknown timezone or malformed date: fall back to 00:00 UTC.
+    return getCheckoutStartUtc(checkout);
+  }
+}
+
+/** Instant after which the system finalizes the stay on its own. */
+export function getAutoFinalizeAtUtc(
+  checkout: string,
+  timezone?: string | null,
+  checkoutUntil?: string | null,
+): Date {
+  return new Date(
+    getFinalizeAvailableFromUtc(checkout, timezone, checkoutUntil).getTime() +
+      AUTO_FINALIZE_AFTER_HOURS * 60 * 60 * 1000,
+  );
+}
+
 export function getRefundDeadlineUtc(checkin: string): Date {
   return new Date(getCheckinStartUtc(checkin).getTime() - REFUND_WINDOW_MS);
 }
@@ -88,6 +188,12 @@ export function computeReservationPolicyCapabilities(
   const checkoutStart = getCheckoutStartUtc(reservation.checkout);
   const refundDeadline = getRefundDeadlineUtc(reservation.checkin);
   const refundDeadlineIso = refundDeadline.toISOString();
+  const finalizeFrom = getFinalizeAvailableFromUtc(
+    reservation.checkout,
+    reservation.timezone,
+    reservation.checkout_until,
+  );
+  const finalizeFromIso = finalizeFrom.toISOString();
   const nowMs = now.getTime();
   const payoutBlocked = reservation.payout_status === "blocked";
 
@@ -101,6 +207,7 @@ export function computeReservationPolicyCapabilities(
       can_finalize: false,
       can_report_no_show: false,
       refund_deadline: refundDeadlineIso,
+      finalize_available_from: finalizeFromIso,
     };
   }
 
@@ -111,6 +218,7 @@ export function computeReservationPolicyCapabilities(
       can_finalize: false,
       can_report_no_show: false,
       refund_deadline: refundDeadlineIso,
+      finalize_available_from: finalizeFromIso,
     };
   }
 
@@ -127,13 +235,14 @@ export function computeReservationPolicyCapabilities(
         !payoutReleased &&
         !payoutBlocked &&
         nowMs <= refundDeadline.getTime(),
-      can_finalize: isPaid && !payoutBlocked && fromCheckin,
+      can_finalize: isPaid && !payoutBlocked && nowMs >= finalizeFrom.getTime(),
       can_report_no_show:
         (isPaid || reservation.payment_status === "partially_refunded") &&
         !payoutBlocked &&
         !payoutReleased &&
         fromCheckin,
       refund_deadline: refundDeadlineIso,
+      finalize_available_from: finalizeFromIso,
     };
   }
 
@@ -143,6 +252,7 @@ export function computeReservationPolicyCapabilities(
     can_finalize: false,
     can_report_no_show: false,
     refund_deadline: refundDeadlineIso,
+    finalize_available_from: finalizeFromIso,
   };
 }
 

@@ -10,6 +10,8 @@ import {
   UpdateDateColumn,
 } from "typeorm";
 
+import { decimalTransformer } from "../../payments/entities/decimal.transformer";
+
 /**
  * New-platform settings of a legacy site (v4p_jsites1), 1:1 by site_id.
  * No FK to v4p_jsites1 on purpose: the legacy table is owned by PHP and must
@@ -55,6 +57,70 @@ export class SiteSettingsEntity {
 
   @Column({ type: "smallint", nullable: true })
   max_nights!: number | null;
+
+  // Step 6: structured cancellation policy (payments/domain/cancellation-
+  // policy.ts). cancellation_policy_type NULL = legacy rule (no policy).
+  @Column({ type: "varchar", length: 30, nullable: true })
+  cancellation_policy_type!: string | null;
+
+  /** Only free_cancellation: days before check-in (1, 3, 7, 14, 30). */
+  @Column({ type: "tinyint", nullable: true })
+  cancellation_deadline_days!: number | null;
+
+  @Column({ type: "varchar", length: 20, nullable: true })
+  cancellation_penalty_type!: string | null;
+
+  @Column({ type: "varchar", length: 30, nullable: true })
+  no_show_policy!: string | null;
+
+  /** Optional exception: free cancellation N hours after booking. */
+  @Column({ type: "tinyint", nullable: true })
+  grace_after_booking_hours!: number | null;
+
+  /** Optional exception: free cancellation up to N weeks before check-in. */
+  @Column({ type: "tinyint", nullable: true })
+  early_cancellation_weeks!: number | null;
+
+  // Step 6: check-in / check-out schedule (local times, see site-schedule.utils.ts).
+  @Column({ type: "time", nullable: true })
+  checkin_from!: string | null;
+
+  @Column({ type: "time", nullable: true })
+  checkin_until!: string | null;
+
+  @Column({ type: "time", nullable: true })
+  checkout_until!: string | null;
+
+  // Step 4: cribs / cots (max per reservation, no per-night inventory).
+  @Column({ type: "boolean", default: false })
+  cribs_offered!: boolean;
+
+  @Column({ type: "tinyint", nullable: true })
+  cribs_count!: number | null;
+
+  @Column({ type: "boolean", default: false })
+  cribs_is_paid!: boolean;
+
+  @Column({
+    type: "decimal",
+    precision: 10,
+    scale: 2,
+    nullable: true,
+    transformer: decimalTransformer,
+  })
+  cribs_price!: number | null;
+
+  /** per_stay | per_night */
+  @Column({ type: "varchar", length: 20, nullable: true })
+  cribs_pricing_mode!: string | null;
+
+  /** How to request them (e.g. "Avísanos 48 h antes"). */
+  @Column({ type: "varchar", length: 255, nullable: true })
+  cribs_note!: string | null;
+
+  /** IANA timezone of the accommodation (deadline local time). */
+  @Column({ type: "varchar", length: 64, nullable: true })
+  timezone!: string | null;
 
   // Step 7: terms accepted on submission (user id, no FK: legacy users).
   @Column({ type: "datetime", nullable: true })

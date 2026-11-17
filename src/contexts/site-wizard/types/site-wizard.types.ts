@@ -5,6 +5,8 @@ import type {
 } from "@/contexts/pet-policies/entities/unit-pet-policy.entity";
 import type { AnswerStateValue } from "@/contexts/shared/types/answer-state";
 import type { ServicePricingModeValue } from "@/contexts/shared/types/service-pricing-mode";
+import type { SiteCribs } from "../utils/site-cribs.utils";
+import type { SiteSchedule } from "../utils/site-schedule.utils";
 
 export interface SiteWizardProperty {
   main_tipsite_id: number | null;
@@ -178,6 +180,8 @@ export interface WizardServicesPayload {
   tipserv: number[];
   /** Selected ids among the manual tipspec extras (7, 8, 21). */
   tipspec_extra: number[];
+  /** Cribs offered by the site (site_settings.cribs_*). */
+  cribs: SiteCribs;
 }
 
 /** PUT body of step 4: only the keys present are updated. */
@@ -215,9 +219,37 @@ export interface WizardAvailabilitySettings {
   max_nights: number | null;
 }
 
+/** Step 6 structured cancellation policy (codes of cancellation-policy.ts). */
+export interface WizardCancellationSettings {
+  policy_type: string;
+  /** Only free_cancellation. */
+  deadline_days: number | null;
+  penalty_type: string;
+  no_show_policy: string;
+  grace_after_booking_hours: number | null;
+  early_cancellation_weeks: number | null;
+  /** IANA timezone (Europe/Madrid | Atlantic/Canary). */
+  timezone: string;
+}
+
+/** Platform charge rules the step 6 preview needs (platform_settings). */
+export interface WizardChargeRules {
+  /** A5: deferred charge of free-cancellation policies. */
+  deferred_charge_enabled: boolean;
+  /** A6: local time "HH:MM" of the free-cancellation deadline. */
+  deadline_local_time: string;
+  /** A6: below these hours until the deadline the charge is immediate. */
+  deferred_min_lead_hours: number;
+}
+
 /** Step 6 "Reservas". */
 export interface WizardBookingSettingsPayload {
   availability: WizardAvailabilitySettings;
+  /** null = no structured policy (legacy rule). */
+  cancellation: WizardCancellationSettings | null;
+  charge_rules: WizardChargeRules;
+  /** Check-in / check-out schedule; null = not configured yet. */
+  schedule: SiteSchedule | null;
   /** Active units the availability applies to. */
   rooms_count: number;
 }

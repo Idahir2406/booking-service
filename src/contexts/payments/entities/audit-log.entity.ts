@@ -17,6 +17,8 @@ export const AUDIT_ENTITY = {
   SNAPSHOT: "snapshot",
   DISPUTE: "dispute",
   PLATFORM_SETTING: "platform_setting",
+  /** Accommodation changes (site history, entity_id = site id). */
+  SITE: "site",
 } as const;
 
 export type AuditEntityName = (typeof AUDIT_ENTITY)[keyof typeof AUDIT_ENTITY];

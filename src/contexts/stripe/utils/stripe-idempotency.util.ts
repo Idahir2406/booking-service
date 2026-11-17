@@ -25,6 +25,14 @@ export const stripeIdempotencyKeys = {
   refundPending: (reservationId: number, pendingId: number): string =>
     `refund-pending:${reservationId}:${pendingId}`,
   transfer: (reservationId: number): string => `transfer:${reservationId}`,
+  /**
+   * Fase 4: off-session charge of a flexible reservation. `attempt` is the
+   * ledger payment's attempts counter (persisted in the same transaction),
+   * so a rolled-back run retries with the SAME key and Stripe returns the
+   * original PaymentIntent instead of charging twice.
+   */
+  offsessionCharge: (reservationId: number, attempt: number): string =>
+    `offsession-charge:${reservationId}:${attempt}`,
   expressAccount: (userId: number): string => `express-account:${userId}`,
 } as const;
 

@@ -24,15 +24,18 @@ import {
   type IncidentAdminActor,
 } from "../utils/incident-admin.util";
 import {
+  type ReservationNoShowQuote,
+  resolveNoShowQuote,
+} from "../utils/refund-policy.util";
+import {
   INCIDENT_STATUS,
   INCIDENT_TYPE,
   OPEN_INCIDENT_STATUSES,
 } from "../utils/reservation-incident.util";
-import { computeReservationPolicyCapabilities } from "../utils/reservation-policy.util";
 import {
-  type ReservationNoShowQuote,
-  resolveNoShowQuote,
-} from "../utils/refund-policy.util";
+  computeReservationPolicyCapabilities,
+  isDeferredUnpaid,
+} from "../utils/reservation-policy.util";
 import { ReservationService } from "./reservation.service";
 import { ReservationEmailService } from "./reservation-email.service";
 import { ReservationEventService } from "./reservation-event.service";
@@ -117,7 +120,10 @@ export class ReservationNoShowService {
         if (open) {
           throw new ConflictException("no_show_already_reported");
         }
-        if (!computeReservationPolicyCapabilities(reservation, now).can_report_no_show) {
+        if (
+          !computeReservationPolicyCapabilities(reservation, now)
+            .can_report_no_show
+        ) {
           throw new BadRequestException("no_show_not_allowed");
         }
 
@@ -232,6 +238,14 @@ export class ReservationNoShowService {
           manager,
           incident.reservation_id,
         );
+        if (
+          decision === NO_SHOW_DECISION.CONFIRM &&
+          isDeferredUnpaid(reservation)
+        ) {
+          // Fase 4: cannot happen (regularization ends before check-in);
+          // nothing was charged, so there is nothing to apply the policy to.
+          throw new BadRequestException("no_show_unpaid_deferred_charge");
+        }
 
         let refundCents = 0;
         let refundId: string | null = null;
@@ -401,12 +415,22 @@ export class ReservationNoShowService {
   /** After commit; email failures never undo the decision. */
   private async notify(
     reservation: ReservationEntity,
-    emails: [Parameters<ReservationEmailService["sendReservationEmail"]>[0], Record<string, unknown>][],
+    emails: [
+      Parameters<ReservationEmailService["sendReservationEmail"]>[0],
+      Record<string, unknown>,
+    ][],
   ): Promise<void> {
     try {
-      const site = await this.reservationService.getSiteById(reservation.site_id);
+      const site = await this.reservationService.getSiteById(
+        reservation.site_id,
+      );
       for (const [type, extras] of emails) {
-        await this.emailService.sendReservationEmail(type, reservation, site, extras);
+        await this.emailService.sendReservationEmail(
+          type,
+          reservation,
+          site,
+          extras,
+        );
       }
     } catch (error) {
       this.logger.warn(
@@ -416,4 +440,3 @@ export class ReservationNoShowService {
     }
   }
 }
-

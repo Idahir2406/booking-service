@@ -11,12 +11,14 @@ import { DogSizeEntity } from "@/contexts/dog-sizes/entities/dog-size.entity";
 import { DogSupplyEntity } from "@/contexts/dog-supplies/entities/dog-supply.entity";
 import { SiteDogSupplyEntity } from "@/contexts/dog-supplies/entities/site-dog-supply.entity";
 import { GeographyModule } from "@/contexts/geography/geography.module";
+import { PaymentsModule } from "@/contexts/payments/payments.module";
 import { UnitPetPolicyEntity } from "@/contexts/pet-policies/entities/unit-pet-policy.entity";
 import { UnitPetPolicyZoneEntity } from "@/contexts/pet-policies/entities/unit-pet-policy-zone.entity";
 import { ReservationEntity } from "@/contexts/reservations/entities/reservation.entity";
 import { ReservationGuestFeedbackEntity } from "@/contexts/reservations/entities/reservation-guest-feedback.entity";
 import { RoomEntity } from "@/contexts/rooms/entities/room.entity";
 import { RoomsModule } from "@/contexts/rooms/rooms.module";
+import { SiteHistoryModule } from "@/contexts/site-history/site-history.module";
 import { SiteUnitEntity } from "@/contexts/site-unit/entities/site-unit.entity";
 import { SpeciesEntity } from "@/contexts/species/entities/species.entity";
 import { StripeModule } from "@/contexts/stripe/stripe.module";
@@ -52,7 +54,9 @@ import { SiteWizardService } from "./services/site-wizard.service";
     ]),
     LegacyDbModule,
     GeographyModule,
+    PaymentsModule,
     RoomsModule,
+    SiteHistoryModule,
     StripeModule,
   ],
   controllers: [SiteWizardController],

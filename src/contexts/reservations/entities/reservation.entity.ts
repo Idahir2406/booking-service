@@ -42,6 +42,11 @@ export type PayoutStatusValue = (typeof payout_status_values)[number];
 @Entity("reservations")
 @Index("idx_reservations_site_room", ["site_id", "room_id"])
 @Index("idx_reservations_user_checkin", ["user_id", "checkin"])
+@Index("idx_reservations_deferred_charge", [
+  "charge_mode",
+  "payment_status",
+  "charge_at",
+])
 export class ReservationEntity {
   @PrimaryGeneratedColumn({ type: "int" })
   id!: number;
@@ -111,10 +116,34 @@ export class ReservationEntity {
 
   /**
    * When the traveler is charged. `immediate` blocks inventory only after
-   * Stripe confirms. `flexible` is reserved and has no flow yet.
+   * Stripe confirms. `flexible` (Fase 4): Checkout in `setup` mode saves the
+   * card, the reservation is confirmed (nights blocked) and the cron charges
+   * it off-session at `charge_at`.
    */
   @Column({ type: "enum", enum: charge_mode_values, default: "immediate" })
   charge_mode!: ChargeModeValue;
+
+  /** Fase 4: Stripe customer that owns the saved card (flexible). */
+  @Column({ type: "varchar", length: 255, nullable: true })
+  stripe_customer_id?: string | null;
+
+  /** Fase 4: card saved by the setup session, charged off-session. */
+  @Column({ type: "varchar", length: 255, nullable: true })
+  stripe_payment_method_id?: string | null;
+
+  @Column({ type: "varchar", length: 255, nullable: true })
+  stripe_setup_intent_id?: string | null;
+
+  /** Fase 4: instant of the deferred charge (UTC). null = immediate. */
+  @Column({ type: "datetime", nullable: true })
+  charge_at?: Date | null;
+
+  /**
+   * Fase 4: the off-session charge failed; the traveler can pay until then.
+   * Past it the reservation is cancelled (deferred_charge_unpaid).
+   */
+  @Column({ type: "datetime", nullable: true })
+  regularization_deadline_at?: Date | null;
 
   @Column({
     type: "enum",
@@ -196,6 +225,21 @@ export class ReservationEntity {
   /** Latest reservation_snapshots.version for this reservation. */
   @Column({ type: "int", nullable: true })
   snapshot_version?: number | null;
+
+  /** Cribs requested by the traveler (0 = none). */
+  @Column({ type: "smallint", default: 0 })
+  cribs?: number;
+
+  /** Traveler's estimated arrival time ("HH:MM:SS", local), optional. */
+  @Column({ type: "time", nullable: true })
+  arrival_time?: string | null;
+
+  /**
+   * Site check-out time frozen at booking (also in snapshot.schedule); used
+   * by the finalize window (reservation-policy.util).
+   */
+  @Column({ type: "time", nullable: true })
+  checkout_until?: string | null;
 
   /** Timezone applicable to deadlines (A6/A10). */
   @Column({ type: "varchar", length: 64, nullable: true })

@@ -28,6 +28,8 @@ export const REVIEW_ITEM = {
   DESCRIPTION_SHORT: "description_short",
   DESCRIPTION_LONG: "description_long",
   AVAILABILITY: "availability",
+  CANCELLATION_POLICY: "cancellation_policy",
+  SCHEDULE: "schedule",
   STRIPE: "stripe",
 } as const;
 
@@ -97,6 +99,22 @@ export const REVIEW_ITEMS: readonly ReviewItemSpec[] = [
     required: true,
   },
   {
+    // Required to publish a NEW site; sites already submitted keep the
+    // legacy rule until the owner sets one (see buildCompleteness options).
+    key: REVIEW_ITEM.CANCELLATION_POLICY,
+    step: 6,
+    label: "Política de cancelación",
+    required: true,
+  },
+  {
+    // Same rule as the cancellation policy: optional for sites submitted
+    // before the schedule existed (relaxedItemsFor).
+    key: REVIEW_ITEM.SCHEDULE,
+    step: 6,
+    label: "Horario de entrada y salida",
+    required: true,
+  },
+  {
     key: REVIEW_ITEM.STRIPE,
     step: 6,
     label: "Cobros con Stripe conectados",
@@ -137,9 +155,30 @@ export function isPropertyComplete(property: SiteWizardProperty): boolean {
   );
 }
 
-export function buildCompleteness(checks: ReviewChecks): WizardCompleteness {
+export interface CompletenessOptions {
+  /** Required items treated as optional (e.g. already-submitted sites). */
+  optional?: readonly ReviewItemKey[];
+}
+
+/**
+ * Items added after a site was submitted must not block it: an already
+ * submitted site (wizard_completed_at) without a cancellation policy keeps
+ * the legacy rule, so that item is optional for it.
+ */
+export function relaxedItemsFor(submitted: boolean): ReviewItemKey[] {
+  return submitted
+    ? [REVIEW_ITEM.CANCELLATION_POLICY, REVIEW_ITEM.SCHEDULE]
+    : [];
+}
+
+export function buildCompleteness(
+  checks: ReviewChecks,
+  options: CompletenessOptions = {},
+): WizardCompleteness {
+  const optional = new Set<ReviewItemKey>(options.optional ?? []);
   const items: WizardCompletenessItem[] = REVIEW_ITEMS.map(item => ({
     ...item,
+    required: item.required && !optional.has(item.key),
     done: checks[item.key],
   }));
   const weightOf = (item: WizardCompletenessItem) =>

@@ -27,6 +27,7 @@ import {
   ReservationAlternativesAdminController,
   ReservationChangesAdminController,
 } from "./api/reservation-changes-admin.controller";
+import { ReservationsAdminController } from "./api/reservations-admin.controller";
 import { TravelerPanelController } from "./api/traveler-panel.controller";
 import { ReservationEntity } from "./entities/reservation.entity";
 import { ReservationAlternativeEntity } from "./entities/reservation-alternative.entity";
@@ -45,10 +46,13 @@ import { ReservationAlternativeService } from "./services/reservation-alternativ
 import { ReservationChangeService } from "./services/reservation-change.service";
 import { ReservationChangeApplyService } from "./services/reservation-change-apply.service";
 import { ReservationChangeQueryService } from "./services/reservation-change-query.service";
+import { ReservationDeferredChargeService } from "./services/reservation-deferred-charge.service";
 import { ReservationEmailService } from "./services/reservation-email.service";
 import { ReservationEmailTemplateService } from "./services/reservation-email-template.service";
 import { ReservationEventService } from "./services/reservation-event.service";
 import { ReservationFeedbackService } from "./services/reservation-feedback.service";
+import { ReservationHistoryService } from "./services/reservation-history.service";
+import { ReservationHostCannotHostService } from "./services/reservation-host-cannot-host.service";
 import { ReservationIncidentService } from "./services/reservation-incident.service";
 import { ReservationIncidentAdminService } from "./services/reservation-incident-admin.service";
 import { ReservationIncidentNotificationService } from "./services/reservation-incident-notification.service";
@@ -106,6 +110,7 @@ import { TravelerReservationPayService } from "./services/traveler-reservation-p
     RefundsController,
     TravelerPanelController,
     IncidentsAdminController,
+    ReservationsAdminController,
     ReservationChangesAdminController,
     ReservationAlternativesAdminController,
   ],
@@ -135,6 +140,10 @@ import { TravelerReservationPayService } from "./services/traveler-reservation-p
     HostPayoutBlockService,
     // Punto 6: host-reported no-show reviewed by V4P
     ReservationNoShowService,
+    ReservationHostCannotHostService,
+    ReservationHistoryService,
+    // Fase 4: off-session deferred charge + regularization crons
+    ReservationDeferredChargeService,
     MysqlService,
   ],
   exports: [
@@ -146,6 +155,7 @@ import { TravelerReservationPayService } from "./services/traveler-reservation-p
     ReservationRefundService,
     ReservationFeedbackService,
     ReservationEventService,
+    ReservationDeferredChargeService,
   ],
 })
 export class ReservationModule {}

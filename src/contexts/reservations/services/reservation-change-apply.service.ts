@@ -11,6 +11,10 @@ import {
 import { EntityManager } from "typeorm";
 
 import { actors } from "../../payments/domain/audit-actor";
+import {
+  CHARGE_MODE,
+  resolveChargePlan,
+} from "../../payments/domain/cancellation-policy";
 import { PRICE_LINE_TYPE } from "../../payments/entities/reservation-price-line.entity";
 import { PriceLinesService } from "../../payments/services/price-lines.service";
 import { ReservationEconomicsService } from "../../payments/services/reservation-economics.service";
@@ -30,6 +34,7 @@ import {
   type ChangeTarget,
   snapshotDogs,
 } from "../utils/reservation-change.util";
+import { isDeferredUnpaid } from "../utils/reservation-policy.util";
 import { linkSavedDogs } from "../utils/saved-dog-link.util";
 import {
   type QuoteReservationResult,
@@ -307,13 +312,29 @@ export class ReservationChangeApplyService {
 
     const before = this.auditFields(reservation);
     const previousVersion = input.basedOnSnapshotVersion;
+    // Fase 4: flexible reservation not charged yet -> no money moves now;
+    // the pending charge follows the new total and the new deadline.
+    const deferredUnpaid = isDeferredUnpaid(reservation);
+    const deferredChargeAt = deferredUnpaid
+      ? await this.recomputeChargeAt(reservation, input)
+      : null;
+    const offerSnapshot =
+      deferredChargeAt === null
+        ? input.offer.snapshot
+        : {
+            ...input.offer.snapshot,
+            refund_policy: {
+              ...input.offer.snapshot.refund_policy,
+              charge_at: deferredChargeAt.toISOString(),
+            },
+          };
 
     // 2. New snapshot version linked to the previous one (append-only).
     const snapshot = await this.snapshots.createSnapshot(
       reservation.id,
       input.reason,
       {
-        ...input.offer.snapshot,
+        ...offerSnapshot,
         previous_version: previousVersion,
         change: {
           kind: input.kind,
@@ -377,7 +398,16 @@ export class ReservationChangeApplyService {
     let refundCents = 0;
     let refundInitiated = false;
     let refundId: string | null = null;
-    if (delta < 0) {
+    if (deferredUnpaid) {
+      // Nothing was charged: the deferred charge is the new total.
+      const newTotalCents = Math.round(
+        Number(input.offer.snapshot.total_cents),
+      );
+      reservation.total_cents = newTotalCents;
+      reservation.total = newTotalCents / 100;
+      reservation.subtotal = newTotalCents / 100;
+      reservation.charge_at = deferredChargeAt ?? reservation.charge_at;
+    } else if (delta < 0) {
       refundCents = -delta;
       const result = await this.payoutService.refundInTransaction(
         manager,
@@ -435,6 +465,41 @@ export class ReservationChangeApplyService {
     };
   }
 
+  /**
+   * Fase 4: charge_at of an unpaid flexible reservation for its NEW
+   * check-in, with the policy frozen in the snapshot. If the new plan is
+   * immediate (deadline passed or under deferred_min_lead_hours), charge_at
+   * becomes `now`: the deferred-charge cron charges it within 5 minutes and
+   * a failure opens the usual regularization window.
+   */
+  private async recomputeChargeAt(
+    reservation: ReservationEntity,
+    input: ApplyChangeInput,
+  ): Promise<Date | null> {
+    const rule = input.offer.snapshot.refund_policy;
+    const policy = rule.cancellation ?? null;
+    if (!policy) {
+      return reservation.charge_at ? new Date(reservation.charge_at) : null;
+    }
+    const settings = await this.economics.getPlatformSettings();
+    const plan = resolveChargePlan({
+      policy,
+      checkin: input.offer.target.checkin.slice(0, 10),
+      timezone:
+        input.offer.snapshot.timezone ??
+        rule.timezone ??
+        reservation.timezone ??
+        "Europe/Madrid",
+      deadlineLocalTime:
+        rule.deadline_local_time ?? settings.deadline_local_time,
+      now: input.now,
+      minLeadHours: settings.deferred_min_lead_hours,
+    });
+    return plan.charge_mode === CHARGE_MODE.FLEXIBLE && plan.charge_at_iso
+      ? new Date(plan.charge_at_iso)
+      : input.now;
+  }
+
   /** Maps a move conflict (nights gone) to the stable code. */
   isUnavailableError(error: unknown): boolean {
     return error instanceof ConflictException;
@@ -465,6 +530,14 @@ export class ReservationChangeApplyService {
       snapshot_version: reservation.snapshot_version ?? null,
       payment_status: reservation.payment_status,
       amount_refunded: reservation.amount_refunded ?? null,
+      ...(reservation.charge_mode === "flexible"
+        ? {
+            charge_at: reservation.charge_at
+              ? new Date(reservation.charge_at).toISOString()
+              : null,
+            total_cents: reservation.total_cents ?? null,
+          }
+        : {}),
     };
   }
 }

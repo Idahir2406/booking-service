@@ -204,6 +204,18 @@ export class FakeReservationDb {
           found ? Object.assign(new ReservationEntity(), found) : null,
         );
       },
+      /** Cron queries (Fase 4): where with FindOperators; select/order/take ignored. */
+      find: (options: FindOneOptions) =>
+        Promise.resolve(
+          [...this.reservations.values()]
+            .filter(row =>
+              matchesWhere(
+                row as unknown as Record<string, unknown>,
+                options.where,
+              ),
+            )
+            .map(row => Object.assign(new ReservationEntity(), row)),
+        ),
       update: (
         criteria: number | { id: number },
         patch: Partial<ReservationEntity>,

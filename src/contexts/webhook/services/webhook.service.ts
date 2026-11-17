@@ -210,6 +210,15 @@ export class WebhookService {
           manager,
         );
       }
+      case "payment_intent.succeeded":
+      case "payment_intent.payment_failed": {
+        // Fase 4: only off-session deferred charges (metadata.deferred=1).
+        return this.reservationWebhookService.handlePaymentIntentEvent(
+          event,
+          manager,
+          afterCommit,
+        );
+      }
       case "charge.refunded": {
         return this.reservationWebhookService.handleChargeRefunded(
           event,

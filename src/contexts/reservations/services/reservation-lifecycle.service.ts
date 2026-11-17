@@ -4,18 +4,21 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import { Logger } from "@nestjs/common";
+import { Cron } from "@nestjs/schedule";
 import { InjectRepository } from "@nestjs/typeorm";
-import { EntityManager, Repository } from "typeorm";
+import { EntityManager, In, LessThanOrEqual, Not, Repository } from "typeorm";
 
-import { actors } from "../../payments/domain/audit-actor";
+import { type Actor, actors } from "../../payments/domain/audit-actor";
 import { ReservationEconomicsService } from "../../payments/services/reservation-economics.service";
 import { envs } from "../../shared/configs/envs";
 import { CancelReservationDto } from "../dto/cancel-reservation.dto";
 import { ReservationEntity } from "../entities/reservation.entity";
+import { ReservationIncidentEntity } from "../entities/reservation-incident.entity";
 import {
+  AUTO_FINALIZE_AFTER_HOURS,
   computeReservationPolicyCapabilities,
-  getCheckinStartUtc,
-  getCheckoutStartUtc,
+  getAutoFinalizeAtUtc,
 } from "../utils/reservation-policy.util";
 import { ReservationService } from "./reservation.service";
 import { ReservationEmailService } from "./reservation-email.service";
@@ -38,6 +41,8 @@ interface FinalizeOutcome {
  */
 @Injectable()
 export class ReservationLifecycleService {
+  private readonly logger = new Logger(ReservationLifecycleService.name);
+
   constructor(
     @InjectRepository(ReservationEntity)
     private readonly reservationRepository: Repository<ReservationEntity>,
@@ -77,11 +82,86 @@ export class ReservationLifecycleService {
     );
   }
 
+  /** Host action "Finalizar estancia" (from check-out, see reservation-policy.util). */
   async finalizeReservation(id: number, siteId?: number) {
+    return this.finalize(id, { siteId });
+  }
+
+  /**
+   * Auto-finalize: confirmed + paid stays whose check-out passed more than
+   * AUTO_FINALIZE_AFTER_HOURS ago and the host did not finalize. Skips
+   * blocked payouts and reservations with an open payout-blocking incident
+   * (V4P resolves those). Same path as the host action, actor = system.
+   */
+  @Cron("17 * * * *")
+  async processAutoFinalize(now: Date = new Date()): Promise<void> {
+    // Coarse DB filter (checkout date + margin); the exact local instant is
+    // checked per row with the reservation timezone.
+    const cutoff = new Date(
+      now.getTime() - AUTO_FINALIZE_AFTER_HOURS * 60 * 60 * 1000,
+    );
+    // payout_status is NULL until finalize (or held/blocked): filter in JS,
+    // `Not("blocked")` would drop the NULL rows in SQL.
+    const candidates = await this.reservationRepository.find({
+      where: {
+        status: "confirmed",
+        payment_status: "paid",
+        checkout: LessThanOrEqual(cutoff.toISOString().slice(0, 10)),
+      },
+      order: { checkout: "ASC" },
+      take: 200,
+    });
+    const due = candidates.filter(
+      row =>
+        row.payout_status !== "blocked" &&
+        getAutoFinalizeAtUtc(
+          row.checkout,
+          row.timezone,
+          row.checkout_until,
+        ).getTime() <= now.getTime(),
+    );
+    if (due.length === 0) {
+      return;
+    }
+
+    const blocking = await this.reservationRepository.manager
+      .getRepository(ReservationIncidentEntity)
+      .find({
+        where: {
+          reservation_id: In(due.map(row => row.id)),
+          blocks_payout: true,
+          status: Not("resolved"),
+        },
+        select: { reservation_id: true },
+      });
+    const blocked = new Set(blocking.map(row => row.reservation_id));
+
+    for (const reservation of due) {
+      if (blocked.has(reservation.id)) {
+        continue;
+      }
+      try {
+        await this.finalize(reservation.id, { system: true, now });
+        this.logger.log(`Auto-finalized reservation ${reservation.id}`);
+      } catch (error) {
+        this.logger.error(
+          `Auto-finalize failed for reservation ${reservation.id}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+      }
+    }
+  }
+
+  private async finalize(
+    id: number,
+    by: { siteId?: number; system?: boolean; now?: Date },
+  ) {
     const outcome = await this.reservationRepository.manager.transaction(
       async (manager): Promise<FinalizeOutcome> => {
         const reservation = await this.lockReservation(manager, id);
-        this.assertHostAccess(reservation, siteId);
+        if (!by.system) {
+          this.assertHostAccess(reservation, by.siteId);
+        }
 
         if (reservation.status === "finalized") {
           return { reservation, changed: false };
@@ -96,13 +176,12 @@ export class ReservationLifecycleService {
           );
         }
 
-        const now = new Date();
+        const now = by.now ?? new Date();
         const policy = computeReservationPolicyCapabilities(reservation, now);
         if (!policy.can_finalize) {
-          const checkinStart = getCheckinStartUtc(reservation.checkin);
-          if (now.getTime() < checkinStart.getTime()) {
+          if (now.getTime() < Date.parse(policy.finalize_available_from)) {
             throw new BadRequestException(
-              "Cannot finalize before check-in date",
+              "Cannot finalize before check-out date",
             );
           }
           throw new BadRequestException(
@@ -114,7 +193,9 @@ export class ReservationLifecycleService {
           now.getTime() + envs.FEEDBACK_PAYOUT_DELAY_HOURS * 60 * 60 * 1000,
         );
 
-        const actor = actors.host(siteId);
+        const actor: Actor = by.system
+          ? actors.system("auto_finalize")
+          : actors.host(by.siteId);
         reservation.status = "finalized";
         reservation.finalized_at = now;
         reservation.feedback_deadline_at = deadline;
@@ -156,7 +237,10 @@ export class ReservationLifecycleService {
           manager,
           id,
           "finalized",
-          { feedback_deadline_at: deadline.toISOString() },
+          {
+            feedback_deadline_at: deadline.toISOString(),
+            by: by.system ? "system" : "host",
+          },
         );
 
         return { reservation: saved, changed: true, feedbackToken, deadline };
