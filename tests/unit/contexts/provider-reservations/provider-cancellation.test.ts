@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import { createHmac } from "node:crypto";
 
 import {
   PROVIDER_PENALTY_SOURCE,
@@ -9,10 +8,12 @@ import {
   withCancellationRecord,
 } from "@/src/contexts/provider-reservations/domain/provider-cancellation";
 import {
+  checkNuiteeSignature,
+  computeNuiteeSignature,
+  decodeEmbeddedJson,
+  NUITEE_SIGNATURE_FAILURE,
   parseProviderWebhook,
-  PROVIDER_WEBHOOK_KIND,
-  verifyHmacSignature,
-  webhookKind,
+  verifyAuthToken,
 } from "@/src/contexts/provider-reservations/domain/provider-webhook.util";
 
 const OFFER = {
@@ -184,52 +185,144 @@ describe("cancellation record in provider_booking_json", () => {
   });
 });
 
-describe("Nuitee webhook signature and parsing", () => {
-  const secret = "whsec_test";
-  const body = Buffer.from(
-    JSON.stringify({
-      event: "booking.cancelled",
-      id: "evt_1",
-      data: { bookingId: "BK-1", clientReference: "V4P-1" },
-    }),
-  );
-  const hex = createHmac("sha256", secret).update(body).digest("hex");
-
-  it("accepts hex, sha256= prefixed and base64 HMAC-SHA256", () => {
-    expect(verifyHmacSignature(body, hex, secret)).toBe(true);
-    expect(verifyHmacSignature(body, `sha256=${hex}`, secret)).toBe(true);
-    const b64 = createHmac("sha256", secret).update(body).digest("base64");
-    expect(verifyHmacSignature(body, b64, secret)).toBe(true);
+describe("Nuitee webhook authentication token", () => {
+  it("accepts the raw token and the Bearer form", () => {
+    expect(verifyAuthToken("tok_123", "tok_123")).toBe(true);
+    expect(verifyAuthToken("Bearer tok_123", "tok_123")).toBe(true);
+    expect(verifyAuthToken("bearer   tok_123 ", "tok_123")).toBe(true);
   });
 
-  it("rejects a wrong or missing signature", () => {
-    expect(verifyHmacSignature(body, hex, "other")).toBe(false);
-    expect(verifyHmacSignature(Buffer.from("{}"), hex, secret)).toBe(false);
-    expect(verifyHmacSignature(body, null, secret)).toBe(false);
-    expect(verifyHmacSignature(body, "abc", secret)).toBe(false);
+  it("rejects a missing, wrong or prefix token", () => {
+    expect(verifyAuthToken(null, "tok_123")).toBe(false);
+    expect(verifyAuthToken("", "tok_123")).toBe(false);
+    expect(verifyAuthToken("tok_12", "tok_123")).toBe(false);
+    expect(verifyAuthToken("Bearer nope", "tok_123")).toBe(false);
+    expect(verifyAuthToken("tok_123", "")).toBe(false);
+  });
+});
+
+function at(seconds: number): Date {
+  return new Date(seconds * 1000);
+}
+
+describe("Nuitee webhook request signature (SHA-512)", () => {
+  // Test vector from docs.liteapi.travel/docs/using-liteapi-webhooks.
+  const body = Buffer.from('{"sample":"payload"}');
+  const secret = "testSharedSecret";
+  const timestamp = "1602838959";
+  const expected =
+    "6854adcc0fbd9b4216bcbc5dd0742fb83929a8151cfc8bd37ecb41a4a0ebb9c0abdafee11d7e5e9fc25aedff922c5b124daafc0e30e1e93a98472630d274b016";
+  const input = {
+    rawBody: body,
+    secret,
+    timestamp,
+    signature: expected,
+    maxAgeSeconds: 86_400,
+    now: at(1_602_838_959 + 60),
+  };
+
+  it("reproduces the documented test vector", () => {
+    expect(computeNuiteeSignature(body, secret, timestamp)).toBe(expected);
+    expect(checkNuiteeSignature(input)).toBeNull();
+    expect(
+      checkNuiteeSignature({ ...input, signature: expected.toUpperCase() }),
+    ).toBeNull();
   });
 
-  it("maps event names loosely", () => {
-    expect(webhookKind("booking.cancelled")).toBe(
-      PROVIDER_WEBHOOK_KIND.CANCELLED,
+  it("rejects a bad signature, body or secret", () => {
+    expect(checkNuiteeSignature({ ...input, signature: "0".repeat(128) })).toBe(
+      NUITEE_SIGNATURE_FAILURE.BAD_SIGNATURE,
     );
-    expect(webhookKind("BOOKING_FAILED")).toBe(PROVIDER_WEBHOOK_KIND.FAILED);
-    expect(webhookKind("booking.confirmed")).toBe(
-      PROVIDER_WEBHOOK_KIND.CONFIRMED,
+    expect(checkNuiteeSignature({ ...input, signature: "abc" })).toBe(
+      NUITEE_SIGNATURE_FAILURE.BAD_SIGNATURE,
     );
-    expect(webhookKind("booking.updated")).toBe(PROVIDER_WEBHOOK_KIND.UPDATED);
-    expect(webhookKind("ping")).toBe(PROVIDER_WEBHOOK_KIND.OTHER);
+    expect(checkNuiteeSignature({ ...input, rawBody: Buffer.from("{}") })).toBe(
+      NUITEE_SIGNATURE_FAILURE.BAD_SIGNATURE,
+    );
+    expect(checkNuiteeSignature({ ...input, secret: "other" })).toBe(
+      NUITEE_SIGNATURE_FAILURE.BAD_SIGNATURE,
+    );
   });
 
-  it("extracts ids, falling back to a body hash", () => {
-    expect(parseProviderWebhook(JSON.parse(body.toString()), body)).toEqual({
+  it("rejects missing headers, non-numeric and stale timestamps", () => {
+    expect(checkNuiteeSignature({ ...input, timestamp: null })).toBe(
+      NUITEE_SIGNATURE_FAILURE.MISSING_HEADERS,
+    );
+    expect(checkNuiteeSignature({ ...input, signature: undefined })).toBe(
+      NUITEE_SIGNATURE_FAILURE.MISSING_HEADERS,
+    );
+    expect(checkNuiteeSignature({ ...input, timestamp: "16028x" })).toBe(
+      NUITEE_SIGNATURE_FAILURE.BAD_TIMESTAMP,
+    );
+    expect(
+      checkNuiteeSignature({ ...input, now: at(1_602_838_959 + 86_401) }),
+    ).toBe(NUITEE_SIGNATURE_FAILURE.STALE_TIMESTAMP);
+    expect(
+      checkNuiteeSignature({ ...input, now: at(1_602_838_959 - 3600) }),
+    ).toBe(NUITEE_SIGNATURE_FAILURE.STALE_TIMESTAMP);
+  });
+});
+
+describe("Nuitee webhook envelope parsing", () => {
+  it("decodes the double-encoded request/response strings", () => {
+    const payload = {
+      event_id: "evt_1",
+      event_name: "booking.book",
+      sandbox: true,
+      request: JSON.stringify({ clientReference: "V4P-1" }),
+      response: JSON.stringify({
+        bookingId: "BK-1",
+        status: "CONFIRMED",
+        clientReference: "V4P-1",
+      }),
+    };
+    const raw = Buffer.from(JSON.stringify(payload));
+
+    expect(parseProviderWebhook(payload, raw)).toMatchObject({
       eventId: "evt_1",
-      eventType: "booking.cancelled",
-      kind: PROVIDER_WEBHOOK_KIND.CANCELLED,
+      eventName: "booking.book",
+      sandbox: true,
       bookingId: "BK-1",
       clientReference: "V4P-1",
+      prebookId: null,
+      request: { clientReference: "V4P-1" },
+      response: { status: "CONFIRMED" },
     });
-    const anonymous = Buffer.from('{"type":"x","booking_id":"BK-2"}');
+  });
+
+  it("book_error: request 'null', prebookId and the inner error JSON", () => {
+    const payload = {
+      event_id: "evt_2",
+      event_name: "booking.book_error",
+      request: "null",
+      response: JSON.stringify({
+        response: JSON.stringify({
+          error: { code: 4002, message: "sold out" },
+        }),
+        prebookId: "PB-9",
+      }),
+    };
+    const parsed = parseProviderWebhook(
+      payload,
+      Buffer.from(JSON.stringify(payload)),
+    );
+
+    expect(parsed.request).toBeNull();
+    expect(parsed.prebookId).toBe("PB-9");
+    expect(parsed.errorDetail).toEqual({
+      error: { code: 4002, message: "sold out" },
+    });
+    expect(parsed.sandbox).toBe(false);
+  });
+
+  it("tolerates already-decoded objects and falls back to a body hash", () => {
+    expect(decodeEmbeddedJson({ a: 1 })).toEqual({ a: 1 });
+    expect(decodeEmbeddedJson("not json")).toBe("not json");
+    expect(decodeEmbeddedJson(null)).toBeNull();
+    expect(decodeEmbeddedJson("null")).toBeNull();
+    const anonymous = Buffer.from(
+      '{"event_name":"booking.cancel","request":{"bookingId":"BK-2"}}',
+    );
     const parsed = parseProviderWebhook(
       JSON.parse(anonymous.toString()),
       anonymous,

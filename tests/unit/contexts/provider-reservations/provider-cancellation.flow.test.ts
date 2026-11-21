@@ -5,13 +5,16 @@ import type {
 } from "@/src/contexts/providers/domain/provider.types";
 
 import { Buffer } from "node:buffer";
-import { createHmac } from "node:crypto";
 
 import { createEconomics } from "@/tests/utils/economics";
 import { FakeReservationDb } from "@/tests/utils/fake-reservation-db";
 
-import { readCancellationRecord } from "@/src/contexts/provider-reservations/domain/provider-cancellation";
+import {
+  readCancellationRecord,
+  withCancellationRecord,
+} from "@/src/contexts/provider-reservations/domain/provider-cancellation";
 import { PROVIDER_CANCELLED_BY_HOTEL_REASON } from "@/src/contexts/provider-reservations/domain/provider-reservation.types";
+import { computeNuiteeSignature } from "@/src/contexts/provider-reservations/domain/provider-webhook.util";
 import { ProviderWebhookEventEntity } from "@/src/contexts/provider-reservations/entities/provider-webhook-event.entity";
 import { ProviderCancellationService } from "@/src/contexts/provider-reservations/services/provider-cancellation.service";
 import { ProviderWebhookService } from "@/src/contexts/provider-reservations/services/provider-webhook.service";
@@ -200,6 +203,7 @@ const createFixture = (
     row,
     traveler,
     reservationRepo,
+    reservationRepository,
   };
 };
 
@@ -487,131 +491,578 @@ describe("hotel cancellation (provider initiated)", () => {
   });
 });
 
-const createWebhook = () => {
-  const fx = createFixture();
+const createWebhook = (
+  reservationOverrides: Partial<ReservationEntity> = {},
+) => {
+  const fx = createFixture(reservationOverrides);
   const bookingService = {
     resolvePending: vi.fn(() => Promise.resolve({ outcome: "confirmed" })),
+    updateHotelConfirmation: vi.fn(() => Promise.resolve(true)),
   };
   const eventRepository = fx.db.store.repository(ProviderWebhookEventEntity);
+  const offerRepository = fx.db.store.repository(ProviderOfferEntity);
   const webhook = new ProviderWebhookService(
     eventRepository as never,
-    fx.reservationRepo as never,
+    fx.reservationRepository as never,
+    offerRepository as never,
     { get: () => fx.provider } as never,
     bookingService as never,
     fx.service,
+    fx.incidents as never,
+    fx.notifier as never,
   );
   const events = () => fx.db.store.rows(ProviderWebhookEventEntity);
-  return { fx, webhook, bookingService, events };
+  return { fx, webhook, bookingService, events, offerRepository };
 };
 
-describe("ProviderWebhookService", () => {
-  const SECRET = "whsec_nuitee";
-  const originalSecret = envs.NUITEE_WEBHOOK_SECRET;
+interface EnvelopeInput {
+  event_id?: string;
+  event_name: string;
+  request?: unknown;
+  response?: unknown;
+  sandbox?: boolean;
+}
 
-  afterEach(() => {
-    Object.assign(envs, { NUITEE_WEBHOOK_SECRET: originalSecret });
-  });
-
-  const body = Buffer.from(
+/** Nuitee envelope: request/response are JSON strings. */
+function envelope(input: EnvelopeInput): Buffer {
+  return Buffer.from(
     JSON.stringify({
-      event: "booking.cancelled",
-      id: "evt_1",
-      data: { bookingId: "BK-1", price: 1 },
+      event_id: input.event_id ?? `evt_${input.event_name}`,
+      event_name: input.event_name,
+      request: JSON.stringify(input.request ?? null),
+      response: JSON.stringify(input.response ?? null),
+      sandbox: input.sandbox ?? false,
     }),
   );
-  const signature = createHmac("sha256", SECRET).update(body).digest("hex");
+}
 
-  it("rejects a bad signature without recording anything", async () => {
-    Object.assign(envs, { NUITEE_WEBHOOK_SECRET: SECRET });
-    const { webhook, events } = createWebhook();
+const TOKEN = "nuitee_auth_token_1";
+const auth = { authorization: TOKEN };
 
-    await expect(
-      webhook.handle({
-        rawBody: body,
-        headers: { "x-liteapi-signature": "deadbeef" },
-      }),
-    ).rejects.toMatchObject({ status: 401 });
-    expect(events()).toHaveLength(0);
+const cancelBody = envelope({
+  event_id: "evt_cancel",
+  event_name: "booking.cancel",
+  request: { bookingId: "BK-1" },
+  response: { bookingId: "BK-1", status: "CANCELLED" },
+});
+
+function sandboxCancel(eventId: string): Buffer {
+  return envelope({
+    event_id: eventId,
+    event_name: "booking.cancel",
+    response: { bookingId: "BK-1" },
+    sandbox: true,
+  });
+}
+
+function pendingCancellation(json: unknown, status: "requested" | "pending") {
+  return withCancellationRecord(json, {
+    status,
+    initiator: "traveler",
+    requested_at: BEFORE_DEADLINE.toISOString(),
+    reason: "change_of_plans",
+    notes: null,
+    actor_id: 7,
+    waive_penalty: false,
+    provider_raw_status: null,
+    penalty_net_cents: null,
+    penalty_cents: null,
+    refund_cents: null,
+    completed_at: null,
+    alerted_at: null,
+  });
+}
+
+describe("ProviderWebhookService", () => {
+  const original = {
+    NUITEE_WEBHOOK_AUTH_TOKEN: envs.NUITEE_WEBHOOK_AUTH_TOKEN,
+    NUITEE_WEBHOOK_SECRET: envs.NUITEE_WEBHOOK_SECRET,
+    NUITEE_WEBHOOK_MAX_AGE_SECONDS: envs.NUITEE_WEBHOOK_MAX_AGE_SECONDS,
+    NUITEE_WEBHOOK_ACCEPT_SANDBOX: envs.NUITEE_WEBHOOK_ACCEPT_SANDBOX,
+    NODE_ENV: envs.NODE_ENV,
+  };
+
+  beforeEach(() => {
+    Object.assign(envs, {
+      NUITEE_WEBHOOK_AUTH_TOKEN: TOKEN,
+      NUITEE_WEBHOOK_SECRET: undefined,
+      NUITEE_WEBHOOK_MAX_AGE_SECONDS: 86_400,
+      NUITEE_WEBHOOK_ACCEPT_SANDBOX: false,
+    });
   });
 
-  it("hotel cancellation: re-reads the booking, refunds once, dedupes replays", async () => {
-    Object.assign(envs, { NUITEE_WEBHOOK_SECRET: SECRET });
-    const { fx, webhook, events } = createWebhook();
-    fx.provider.getBooking.mockResolvedValue(
-      bookResult({ status: "CANCELLED", rawStatus: "CANCELLED" }),
-    );
+  afterEach(() => {
+    Object.assign(envs, original);
+  });
 
-    const first = await webhook.handle({
-      rawBody: body,
-      headers: { "x-signature": signature },
-    });
-    const second = await webhook.handle({
-      rawBody: body,
-      headers: { "x-signature": signature },
+  describe("authentication", () => {
+    it("accepts the token raw or as Bearer", async () => {
+      const { webhook, events } = createWebhook();
+
+      const raw = await webhook.handle({ rawBody: cancelBody, headers: auth });
+      const bearer = await webhook.handle({
+        rawBody: envelope({ event_id: "evt_b", event_name: "booking.prebook" }),
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+
+      expect(raw.duplicate).toBe(false);
+      expect(bearer.status).toBe("ignored");
+      expect(events()[0]?.signature_verified).toBe(true);
     });
 
-    expect(first).toMatchObject({ duplicate: false, status: "processed" });
-    expect(second.duplicate).toBe(true);
-    expect(fx.provider.getBooking).toHaveBeenCalledWith("BK-1");
-    expect(fx.payout.refundInTransaction).toHaveBeenCalledTimes(1);
-    expect(fx.payout.refundInTransaction.mock.calls[0]?.[2]).toBe(TOTAL);
-    expect(fx.reservation()?.cancel_reason).toBe(
-      PROVIDER_CANCELLED_BY_HOTEL_REASON,
-    );
-    expect(events()).toHaveLength(1);
-    expect(events()[0]).toMatchObject({
-      status: "processed",
-      reservation_id: 1,
-      signature_verified: true,
+    it.each([
+      ["missing", {}],
+      ["wrong", { authorization: "nope" }],
+      ["wrong bearer", { authorization: "Bearer nope" }],
+    ])("%s token: 401 and nothing recorded", async (_label, headers) => {
+      const { webhook, events, fx } = createWebhook();
+
+      await expect(
+        webhook.handle({ rawBody: cancelBody, headers }),
+      ).rejects.toMatchObject({ status: 401 });
+      expect(events()).toHaveLength(0);
+      expect(fx.provider.getBooking).not.toHaveBeenCalled();
+    });
+
+    it("production without token nor secret fails closed (503)", async () => {
+      Object.assign(envs, {
+        NODE_ENV: "production",
+        NUITEE_WEBHOOK_AUTH_TOKEN: undefined,
+      });
+      const { webhook, events } = createWebhook();
+
+      await expect(
+        webhook.handle({ rawBody: cancelBody, headers: auth }),
+      ).rejects.toMatchObject({ status: 503 });
+      expect(events()).toHaveLength(0);
+    });
+
+    it("outside production an unset token is accepted (unverified)", async () => {
+      Object.assign(envs, { NUITEE_WEBHOOK_AUTH_TOKEN: undefined });
+      const { webhook, events } = createWebhook();
+
+      await webhook.handle({ rawBody: cancelBody, headers: {} });
+
+      expect(events()[0]?.signature_verified).toBe(false);
+    });
+
+    describe("request signing", () => {
+      const SECRET = "nuitee_signing_secret";
+      const NOW = new Date("2027-06-01T12:00:00Z");
+      const ts = String(Math.floor(NOW.getTime() / 1000));
+      const signed = (timestamp: string) => ({
+        ...auth,
+        "x-request-timestamp": timestamp,
+        "x-request-signature": computeNuiteeSignature(
+          cancelBody,
+          SECRET,
+          timestamp,
+        ),
+      });
+
+      beforeEach(() => {
+        Object.assign(envs, { NUITEE_WEBHOOK_SECRET: SECRET });
+      });
+
+      it("valid signature (even a retry hours later) is processed", async () => {
+        const { webhook, events } = createWebhook();
+        const later = new Date(NOW.getTime() + 6 * 3_600_000);
+
+        const result = await webhook.handle(
+          { rawBody: cancelBody, headers: signed(ts) },
+          later,
+        );
+
+        expect(result.duplicate).toBe(false);
+        expect(events()[0]?.signature_verified).toBe(true);
+      });
+
+      it("bad signature, missing headers or stale timestamp: 401", async () => {
+        const { webhook, events } = createWebhook();
+        const stale = String(Number(ts) - 86_401);
+
+        await expect(
+          webhook.handle(
+            {
+              rawBody: cancelBody,
+              headers: {
+                ...signed(ts),
+                "x-request-signature": "0".repeat(128),
+              },
+            },
+            NOW,
+          ),
+        ).rejects.toMatchObject({ status: 401 });
+        await expect(
+          webhook.handle({ rawBody: cancelBody, headers: auth }, NOW),
+        ).rejects.toMatchObject({ status: 401 });
+        await expect(
+          webhook.handle({ rawBody: cancelBody, headers: signed(stale) }, NOW),
+        ).rejects.toMatchObject({ status: 401 });
+        expect(events()).toHaveLength(0);
+      });
+
+      it("signature alone authenticates when no token is configured", async () => {
+        Object.assign(envs, {
+          NODE_ENV: "production",
+          NUITEE_WEBHOOK_AUTH_TOKEN: undefined,
+        });
+        const { webhook, events } = createWebhook();
+
+        await webhook.handle({ rawBody: cancelBody, headers: signed(ts) }, NOW);
+
+        expect(events()[0]?.signature_verified).toBe(true);
+      });
     });
   });
 
-  it("unsigned (no secret): never trusts the payload, acts on getBooking", async () => {
-    Object.assign(envs, { NUITEE_WEBHOOK_SECRET: undefined });
-    const { fx, webhook } = createWebhook();
-    // Payload says cancelled, the provider says confirmed.
-    fx.provider.getBooking.mockResolvedValue(bookResult());
-
-    const result = await webhook.handle({ rawBody: body, headers: {} });
-
-    expect(result.action).toBe("no_change:CONFIRMED");
-    expect(fx.payout.refundInTransaction).not.toHaveBeenCalled();
-    expect(fx.reservation()?.status).toBe("confirmed");
-  });
-
-  it("booking still in progress: delegates to resolvePending", async () => {
-    Object.assign(envs, { NUITEE_WEBHOOK_SECRET: undefined });
-    const { fx, webhook, bookingService } = createWebhook();
-    await fx.reservationRepo.save(
-      Object.assign(fx.row(), {
+  describe("booking.book / booking.book_error", () => {
+    it("book: correlates by clientReference and delegates to resolvePending", async () => {
+      const { webhook, bookingService } = createWebhook({
         status: "pending",
         provider_status: "booking",
         external_reservation_id: undefined,
-      }),
-    );
-    const confirmBody = Buffer.from(
-      JSON.stringify({ type: "booking.confirmed", clientReference: "V4P-1" }),
-    );
+      });
 
-    const result = await webhook.handle({ rawBody: confirmBody, headers: {} });
+      const result = await webhook.handle({
+        rawBody: envelope({
+          event_name: "booking.book",
+          request: { clientReference: "V4P-1" },
+          response: {
+            bookingId: "BK-1",
+            status: "CONFIRMED",
+            clientReference: "V4P-1",
+          },
+        }),
+        headers: auth,
+      });
 
-    expect(bookingService.resolvePending).toHaveBeenCalledWith(1);
-    expect(result.action).toBe("resolve_pending:confirmed");
+      expect(bookingService.resolvePending).toHaveBeenCalledWith(1);
+      expect(result).toMatchObject({
+        status: "processed",
+        action: "resolve_pending:confirmed",
+      });
+    });
+
+    it("book_error: correlates by prebookId, reconciles instead of failing", async () => {
+      const { webhook, bookingService, offerRepository } = createWebhook({
+        status: "pending",
+        provider_status: "booking",
+        external_reservation_id: undefined,
+        client_reference: "V4P-OTHER",
+      });
+      await offerRepository.save({
+        reservation_id: 1,
+        provider: "nuitee",
+        offer_id: "offer-2",
+        prebook_id: "PB-9",
+      });
+      bookingService.resolvePending.mockResolvedValueOnce({
+        outcome: "pending",
+      });
+
+      const result = await webhook.handle({
+        rawBody: envelope({
+          event_name: "booking.book_error",
+          request: null,
+          response: {
+            response: JSON.stringify({ error: { code: 1, message: "x" } }),
+            prebookId: "PB-9",
+          },
+        }),
+        headers: auth,
+      });
+
+      expect(bookingService.resolvePending).toHaveBeenCalledWith(1);
+      expect(result.action).toBe("resolve_pending:pending");
+    });
+
+    it("book for an already confirmed reservation is ignored", async () => {
+      const { webhook, bookingService } = createWebhook();
+
+      const result = await webhook.handle({
+        rawBody: envelope({
+          event_name: "booking.book",
+          response: { bookingId: "BK-1", clientReference: "V4P-1" },
+        }),
+        headers: auth,
+      });
+
+      expect(result).toMatchObject({
+        status: "ignored",
+        action: "no_action:confirmed",
+      });
+      expect(bookingService.resolvePending).not.toHaveBeenCalled();
+    });
   });
 
-  it("marks the event failed and rethrows when the provider is down", async () => {
-    Object.assign(envs, { NUITEE_WEBHOOK_SECRET: undefined });
-    const { fx, webhook, events } = createWebhook();
-    fx.provider.getBooking.mockRejectedValueOnce(new Error("503"));
+  describe("booking.cancel", () => {
+    it("hotel cancellation: re-reads, refunds once, dedupes replays", async () => {
+      const { fx, webhook, events } = createWebhook();
+      fx.provider.getBooking.mockResolvedValue(
+        bookResult({ status: "CANCELLED", rawStatus: "CANCELLED" }),
+      );
 
-    await expect(
-      webhook.handle({ rawBody: body, headers: {} }),
-    ).rejects.toThrow("503");
-    expect(events()[0]).toMatchObject({ status: "failed", attempts: 1 });
+      const first = await webhook.handle({
+        rawBody: cancelBody,
+        headers: auth,
+      });
+      const second = await webhook.handle({
+        rawBody: cancelBody,
+        headers: auth,
+      });
 
-    // The provider retries: the failed row is processed again.
-    const retry = await webhook.handle({ rawBody: body, headers: {} });
-    expect(retry.duplicate).toBe(false);
-    expect(events()[0]?.attempts).toBe(2);
+      expect(first).toMatchObject({
+        duplicate: false,
+        status: "processed",
+        action: "provider_cancelled:cancelled",
+      });
+      expect(second.duplicate).toBe(true);
+      expect(fx.provider.getBooking).toHaveBeenCalledWith("BK-1");
+      expect(fx.payout.refundInTransaction).toHaveBeenCalledTimes(1);
+      expect(fx.payout.refundInTransaction.mock.calls[0]?.[2]).toBe(TOTAL);
+      expect(fx.reservation()?.cancel_reason).toBe(
+        PROVIDER_CANCELLED_BY_HOTEL_REASON,
+      );
+      expect(events()).toHaveLength(1);
+      expect(events()[0]).toMatchObject({
+        status: "processed",
+        reservation_id: 1,
+        event_type: "booking.cancel",
+      });
+    });
+
+    it("completes OUR pending cancellation with the traveler policy", async () => {
+      const { fx, webhook } = createWebhook({
+        provider_booking_json: pendingCancellation(
+          { version: 1, holder: { firstName: "Ana" } },
+          "pending",
+        ),
+      });
+      fx.provider.getBooking.mockResolvedValue(
+        bookResult({ status: "CANCELLED", rawStatus: "CANCELLED" }),
+      );
+
+      const result = await webhook.handle({
+        rawBody: cancelBody,
+        headers: auth,
+      });
+
+      expect(result.action).toBe("cancellation_completed:cancelled");
+      expect(fx.reservation()).toMatchObject({
+        status: "cancelled",
+        cancel_reason: "change_of_plans",
+      });
+      expect(fx.incidents.openOnce).not.toHaveBeenCalled();
+      expect(
+        readCancellationRecord(fx.reservation()?.provider_booking_json),
+      ).toMatchObject({ status: "cancelled", initiator: "traveler" });
+    });
+
+    it("never trusts the payload: provider still CONFIRMED -> no change", async () => {
+      const { fx, webhook } = createWebhook();
+
+      const result = await webhook.handle({
+        rawBody: cancelBody,
+        headers: auth,
+      });
+
+      expect(result.action).toBe("no_change:CONFIRMED");
+      expect(fx.payout.refundInTransaction).not.toHaveBeenCalled();
+      expect(fx.reservation()?.status).toBe("confirmed");
+    });
+
+    it("marks the event failed and rethrows when the provider is down", async () => {
+      const { fx, webhook, events } = createWebhook();
+      fx.provider.getBooking.mockRejectedValueOnce(new Error("503"));
+
+      await expect(
+        webhook.handle({ rawBody: cancelBody, headers: auth }),
+      ).rejects.toThrow("503");
+      expect(events()[0]).toMatchObject({ status: "failed", attempts: 1 });
+
+      // Nuitee retries: the failed row is processed again.
+      const retry = await webhook.handle({
+        rawBody: cancelBody,
+        headers: auth,
+      });
+      expect(retry.duplicate).toBe(false);
+      expect(events()[0]).toMatchObject({ status: "processed", attempts: 2 });
+    });
+  });
+
+  describe("booking.cancel_error", () => {
+    const cancelErrorBody = envelope({
+      event_name: "booking.cancel_error",
+      request: { bookingId: "BK-1" },
+      response: {
+        status: "FAILED",
+        cancellation_fee: 0,
+        refund_amount: 0,
+        currency: "EUR",
+        error: { code: 4000, message: "cannot cancel" },
+      },
+    });
+
+    it("drops our pending claim (no refund) and alerts V4P", async () => {
+      const { fx, webhook } = createWebhook({
+        provider_booking_json: pendingCancellation(
+          { version: 1, holder: { firstName: "Ana" } },
+          "pending",
+        ),
+      });
+
+      const result = await webhook.handle({
+        rawBody: cancelErrorBody,
+        headers: auth,
+      });
+
+      expect(result.action).toBe("cancellation_failed");
+      expect(
+        readCancellationRecord(fx.reservation()?.provider_booking_json),
+      ).toBeNull();
+      expect(fx.reservation()?.status).toBe("confirmed");
+      expect(fx.payout.refundInTransaction).not.toHaveBeenCalled();
+      expect(fx.notifier.alertAdmin).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 1 }),
+        expect.stringContaining("4000: cannot cancel"),
+      );
+    });
+
+    it("without a V4P cancellation in flight it is ignored", async () => {
+      const { fx, webhook } = createWebhook();
+
+      const result = await webhook.handle({
+        rawBody: cancelErrorBody,
+        headers: auth,
+      });
+
+      expect(result).toMatchObject({
+        status: "ignored",
+        action: "no_pending_cancellation",
+      });
+      expect(fx.provider.getBooking).not.toHaveBeenCalled();
+    });
+  });
+
+  it("hotelConfirmationNumber: re-reads and updates the code", async () => {
+    const { fx, webhook, bookingService } = createWebhook();
+    const booking = bookResult({ hotelConfirmationCode: "HC-NEW" });
+    fx.provider.getBooking.mockResolvedValue(booking);
+
+    const result = await webhook.handle({
+      rawBody: envelope({
+        event_name: "booking.book.hotelConfirmationNumber",
+        response: { bookingId: "BK-1", hotelConfirmationCode: "HC-NEW" },
+      }),
+      headers: auth,
+    });
+
+    expect(fx.provider.getBooking).toHaveBeenCalledWith("BK-1");
+    expect(bookingService.updateHotelConfirmation).toHaveBeenCalledWith(
+      1,
+      booking,
+    );
+    expect(result.action).toBe("hotel_confirmation_updated");
+  });
+
+  it("checkinInstruction: stored in provider_booking_json", async () => {
+    const { fx, webhook } = createWebhook();
+    const instructions = { bookingId: "BK-1", text: "Llaves en recepción" };
+
+    const result = await webhook.handle({
+      rawBody: envelope({
+        event_name: "booking.checkinInstruction",
+        response: instructions,
+      }),
+      headers: auth,
+    });
+
+    expect(result.action).toBe("checkin_instructions_stored");
+    expect(fx.reservation()?.provider_booking_json).toMatchObject({
+      version: 1,
+      checkin_instructions: instructions,
+    });
+  });
+
+  it("amendment: opens one incident + alert, never moves money", async () => {
+    const { fx, webhook } = createWebhook();
+    const body = envelope({
+      event_id: "evt_amend",
+      event_name: "booking.amendment",
+      response: { bookingId: "BK-1", checkout: "2027-06-13" },
+    });
+
+    const first = await webhook.handle({ rawBody: body, headers: auth });
+    const replay = await webhook.handle({ rawBody: body, headers: auth });
+
+    expect(first.action).toBe("incident_opened");
+    expect(replay.duplicate).toBe(true);
+    expect(fx.incidents.openOnce).toHaveBeenCalledTimes(1);
+    expect(fx.incidents.openOnce).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reservationId: 1,
+        key: "webhook:booking.amendment:evt_amend",
+      }),
+    );
+    expect(fx.notifier.alertAdmin).toHaveBeenCalledTimes(1);
+    expect(fx.payout.refundInTransaction).not.toHaveBeenCalled();
+    expect(fx.provider.getBooking).not.toHaveBeenCalled();
+  });
+
+  it.each(["booking.prebook", "booking.prebook_error", "booking.whatever"])(
+    "%s is recorded as ignored",
+    async eventName => {
+      const { fx, webhook, events } = createWebhook();
+
+      const result = await webhook.handle({
+        rawBody: envelope({
+          event_name: eventName,
+          response: { bookingId: "BK-1" },
+        }),
+        headers: auth,
+      });
+
+      expect(result).toMatchObject({ status: "ignored", duplicate: false });
+      expect(events()[0]?.status).toBe("ignored");
+      expect(fx.provider.getBooking).not.toHaveBeenCalled();
+    },
+  );
+
+  it("unknown booking is ignored (200)", async () => {
+    const { webhook } = createWebhook();
+
+    const result = await webhook.handle({
+      rawBody: envelope({
+        event_name: "booking.cancel",
+        response: { bookingId: "BK-404" },
+      }),
+      headers: auth,
+    });
+
+    expect(result).toMatchObject({
+      status: "ignored",
+      action: "unknown_reservation",
+    });
+  });
+
+  it("sandbox events are ignored in production unless accepted", async () => {
+    Object.assign(envs, { NODE_ENV: "production" });
+    const { fx, webhook } = createWebhook();
+    fx.provider.getBooking.mockResolvedValue(
+      bookResult({ status: "CANCELLED", rawStatus: "CANCELLED" }),
+    );
+    const skipped = await webhook.handle({
+      rawBody: sandboxCancel("evt_sb1"),
+      headers: auth,
+    });
+    Object.assign(envs, { NUITEE_WEBHOOK_ACCEPT_SANDBOX: true });
+    const accepted = await webhook.handle({
+      rawBody: sandboxCancel("evt_sb2"),
+      headers: auth,
+    });
+
+    expect(skipped).toMatchObject({ status: "ignored", action: "sandbox" });
+    expect(accepted.action).toBe("provider_cancelled:cancelled");
   });
 });

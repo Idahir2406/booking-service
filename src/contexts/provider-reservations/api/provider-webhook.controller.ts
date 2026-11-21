@@ -22,6 +22,8 @@ function bodyAsBuffer(body: unknown): Buffer | null {
 
 /**
  * Public Nuitee/LiteAPI webhook (no internal key: the provider calls it).
+ * Authentication (Authentication Token in `authorization`, optional
+ * X-Request-Signature) is done in ProviderWebhookService before any write.
  * main.ts mounts express.raw on this path so the signature is computed on
  * the exact bytes received.
  */

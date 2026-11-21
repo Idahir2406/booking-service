@@ -34,7 +34,7 @@ export class ProviderWebhookEventEntity {
   @Column({ type: "varchar", length: 32 })
   provider!: string;
 
-  /** Provider event id, or sha256 of the raw body when it has none. */
+  /** Nuitee event_id, or sha256 of the raw body when it has none. */
   @Column({ type: "varchar", length: 128 })
   event_id!: string;
 
@@ -54,6 +54,7 @@ export class ProviderWebhookEventEntity {
   })
   status!: ProviderWebhookStatus;
 
+  /** Authentication token and/or request signature verified. */
   @Column({ type: "boolean", default: false })
   signature_verified!: boolean;
 

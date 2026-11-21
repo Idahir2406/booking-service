@@ -994,6 +994,58 @@ export class ProviderCancellationService
     );
   }
 
+  /**
+   * booking.cancel_error webhook for a V4P cancellation still `requested` /
+   * `pending` (the caller already checked getBooking is NOT cancelled):
+   * drops the claim (the booking stays live, nothing is refunded) and
+   * alerts V4P. Returns false when there was no open claim.
+   */
+  async failPendingCancellation(
+    reservationId: number,
+    message: string,
+  ): Promise<boolean> {
+    const failed = await this.reservationRepository.manager.transaction(
+      async manager => {
+        const repository = manager.getRepository(ReservationEntity);
+        const reservation = await repository.findOne({
+          where: { id: reservationId },
+          lock: { mode: "pessimistic_write" },
+        });
+        const record = reservation
+          ? readCancellationRecord(reservation.provider_booking_json)
+          : null;
+        if (
+          !reservation ||
+          !record ||
+          record.status === PROVIDER_CANCELLATION_STATUS.CANCELLED ||
+          reservation.status === "cancelled"
+        ) {
+          return null;
+        }
+        reservation.provider_booking_json = withCancellationRecord(
+          reservation.provider_booking_json,
+          null,
+        );
+        await repository.save(reservation);
+        await this.eventService.logEventInTransaction(
+          manager,
+          reservationId,
+          "provider_cancellation_failed",
+          { message, source: "webhook:booking.cancel_error" },
+        );
+        return reservation;
+      },
+    );
+    if (!failed) {
+      return false;
+    }
+    await this.notifier.alertAdmin(
+      failed,
+      `Nuitee rechazó la cancelación de la reserva ${String(failed.external_reservation_id)}: ${message}. La reserva sigue activa y no se ha reembolsado nada; revisar con el viajero.`,
+    );
+    return true;
+  }
+
   // ---------------------------------------------------------------- helpers
 
   private actorFor(record: ProviderCancellationRecord): Actor {

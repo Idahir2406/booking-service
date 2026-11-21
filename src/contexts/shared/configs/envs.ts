@@ -71,7 +71,26 @@ const envSchema = z.object({
   NUITEE_PAYMENT_METHOD: z
     .enum(["ACC_CREDIT_CARD", "CREDIT", "WALLET"])
     .default("ACC_CREDIT_CARD"),
+  // Webhook Authentication Token (Nuitee dashboard): expected value of the
+  // `authorization` header. Unset: accepted with a warning outside
+  // production; in production the webhook fails closed (503) unless request
+  // signing (NUITEE_WEBHOOK_SECRET) is configured.
+  NUITEE_WEBHOOK_AUTH_TOKEN: z.string().optional(),
+  // Request-signing shared secret (enabled by Nuitee support): verifies
+  // X-Request-Signature = sha512(body + secret + X-Request-Timestamp).
   NUITEE_WEBHOOK_SECRET: z.string().optional(),
+  // Max age of X-Request-Timestamp. Retries keep the ORIGINAL timestamp, so
+  // a 5-min window would reject legitimate retries: default 24 h.
+  NUITEE_WEBHOOK_MAX_AGE_SECONDS: z.coerce
+    .number()
+    .int()
+    .min(60)
+    .default(86_400),
+  // sandbox:true deliveries are ignored in production unless "true".
+  NUITEE_WEBHOOK_ACCEPT_SANDBOX: z
+    .string()
+    .default("false")
+    .transform(v => v === "true" || v === "1"),
   NUITEE_GUEST_NATIONALITY: z.string().length(2).default("ES"),
   NUITEE_CURRENCY: z.string().length(3).default("EUR"),
   // Local HTTP timeouts (ms): live rate search vs every other call.

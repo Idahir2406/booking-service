@@ -100,6 +100,8 @@ export interface ProviderBookingRecord {
   /** Last BookResult.raw / listBookings match. */
   booking: unknown;
   failure: ProviderBookingFailureRecord | null;
+  /** booking.checkinInstruction webhook payload (raw, parsed). */
+  checkin_instructions?: unknown;
   /** Phase 5: cancellation lifecycle (absent until someone cancels). */
   cancellation?: ProviderCancellationRecord | null;
 }

@@ -919,6 +919,62 @@ export class ProviderBookingService {
     return { id: siteId, name: "Alojamiento" } as Site;
   }
 
+  /**
+   * booking.book.hotelConfirmationNumber webhook (after getBooking): stores
+   * the new hotel confirmation code under the row lock and re-sends the
+   * provider confirmation email with it. Returns false when unchanged.
+   */
+  async updateHotelConfirmation(
+    reservationId: number,
+    result: BookResult,
+  ): Promise<boolean> {
+    const code = result.hotelConfirmationCode;
+    if (!code) {
+      return false;
+    }
+    const saved = await this.reservationRepository.manager.transaction(
+      async manager => {
+        const repository = manager.getRepository(ReservationEntity);
+        const reservation = await repository.findOne({
+          where: { id: reservationId },
+          lock: { mode: "pessimistic_write" },
+        });
+        const record = reservation
+          ? readBookingRecord(reservation.provider_booking_json)
+          : null;
+        if (
+          !reservation ||
+          !record ||
+          reservation.provider_status !== "confirmed" ||
+          record.hotel_confirmation_code === code
+        ) {
+          return null;
+        }
+        reservation.provider_booking_json = {
+          ...record,
+          hotel_confirmation_code: code,
+        } satisfies ProviderBookingRecord;
+        await repository.save(reservation);
+        await this.eventService.logEventInTransaction(
+          manager,
+          reservation.id,
+          "provider_hotel_confirmation_updated",
+          {
+            booking_id: result.bookingId,
+            previous: record.hotel_confirmation_code,
+            hotel_confirmation_code: code,
+          },
+        );
+        return reservation;
+      },
+    );
+    if (!saved) {
+      return false;
+    }
+    await this.sendConfirmedEmail(saved, result);
+    return true;
+  }
+
   private async sendConfirmedEmail(
     reservation: ReservationEntity,
     result: BookResult,

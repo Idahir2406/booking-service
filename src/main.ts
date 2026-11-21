@@ -43,7 +43,7 @@ async function bootstrap() {
       },
     }),
   );
-  // Nuitee/LiteAPI webhook: HMAC over the exact raw bytes (phase 5). Any
+  // Nuitee/LiteAPI webhook: SHA-512 request signature over the exact raw bytes (phase 5). Any
   // content type, so a provider sending text/plain still gets verified.
   app.use(
     "/v1/providers/nuitee/webhook",

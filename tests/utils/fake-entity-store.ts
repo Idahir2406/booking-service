@@ -207,10 +207,13 @@ export class FakeEntityStore {
           .map(row => Number(row[column]));
         return Promise.resolve(values.length > 0 ? Math.max(...values) : null);
       },
-      update: (criteria: Row, patch: Row) => {
+      update: (criteria: Row | number | string, patch: Row) => {
+        // TypeORM update(id, patch): a bare id means { id }.
+        const where =
+          typeof criteria === "object" ? criteria : { id: criteria };
         let affected = 0;
         for (const row of table()) {
-          if (matchesWhere(row, criteria)) {
+          if (matchesWhere(row, where)) {
             Object.assign(row, patch);
             affected += 1;
           }
