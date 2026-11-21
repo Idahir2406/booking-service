@@ -159,6 +159,11 @@ export function travelerPolicyAllowsCancel(
 export const CANCELLATION_QUOTE_SOURCE = {
   STRUCTURED: "structured",
   LEGACY_24H: "legacy_24h",
+  /**
+   * External provider reservation (source = nuitee): penalty from
+   * provider_offers.cancellation_json scaled to the sell price (phase 5).
+   */
+  PROVIDER: "provider",
 } as const;
 
 export type CancellationQuoteSource =

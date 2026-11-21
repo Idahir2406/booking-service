@@ -238,6 +238,47 @@ function isStripeResourceMissing(error: unknown): boolean {
   );
 }
 
+/** Provider reservation (source = nuitee): authorize-only Checkout Session. */
+export interface ManualCaptureCheckoutInput {
+  reservationId: number;
+  siteId: number;
+  amountCents: number;
+  /** ISO 4217, any case. */
+  currency: string;
+  email: string;
+  /** Line item name shown by Stripe (hotel + room). */
+  description: string;
+  /** Unix seconds (>= now + 30 min, Stripe rule). */
+  expiresAtUnix: number;
+  /** Session being replaced (null on the first session). */
+  replacedSessionId: string | null;
+  /** Extra metadata (session + PaymentIntent). */
+  metadata?: Record<string, string>;
+}
+
+export interface ManualCaptureCheckoutResult {
+  sessionId: string;
+  url: string | null;
+  expiresAt: Date;
+}
+
+export interface PaymentIntentActionInput {
+  reservationId: number;
+  paymentIntentId: string;
+}
+
+/** Subset of a PaymentIntent the provider booking flow needs. */
+export interface PaymentIntentState {
+  id: string;
+  /** requires_capture | succeeded | canceled | ... */
+  status: string;
+  amount: number;
+  amountCapturable: number;
+  currency: string;
+  /** Unix seconds of the PI creation (authorization age). */
+  created: number;
+}
+
 export interface RefundPaymentIntentInput {
   reservationId: number;
   /** 1-based sequence of refunds created by us for this reservation. */
@@ -935,5 +976,155 @@ export class StripeService {
         input.sequence,
       ),
     });
+  }
+
+  // ------------------------------------------- provider reservations (nuitee)
+
+  /**
+   * Provider reservation (v4p is merchant of record): the card is only
+   * AUTHORIZED (capture_method=manual). The PaymentIntent is captured once
+   * the provider confirms the booking, or cancelled (voided) if it fails.
+   * No transfer_group: there is no host payout. Dynamic payment methods
+   * (no payment_method_types).
+   */
+  async createManualCaptureCheckoutSession(
+    input: ManualCaptureCheckoutInput,
+  ): Promise<ManualCaptureCheckoutResult> {
+    if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
+      throw new BadRequestException(
+        `Reservation ${input.reservationId} has invalid payment amount`,
+      );
+    }
+    const customer = await this.createOrGetCustomer(
+      input.email,
+      input.reservationId,
+    );
+    const webBase = envs.FRONTEND_URL.replace(/\/+$/, "");
+    const metadata: Record<string, string> = {
+      ...input.metadata,
+      reservation_id: input.reservationId.toString(),
+      source: "nuitee",
+    };
+    const session = await this.stripe.checkout.sessions.create(
+      {
+        mode: "payment",
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: input.currency.toLowerCase(),
+              unit_amount: input.amountCents,
+              product_data: { name: input.description.slice(0, 250) },
+            },
+          },
+        ],
+        metadata,
+        payment_intent_data: {
+          capture_method: "manual",
+          metadata: {
+            ...metadata,
+            total_cents: input.amountCents.toString(),
+          },
+        },
+        customer: customer.id,
+        expires_at: input.expiresAtUnix,
+        success_url: `${webBase}/reserva-exito?session_id={CHECKOUT_SESSION_ID}&reservation_id=${input.reservationId}`,
+        cancel_url: `${webBase}/reserva-cancelada?site_id=${input.siteId}&reservation_id=${input.reservationId}`,
+        currency: input.currency.toLowerCase(),
+      },
+      {
+        idempotencyKey: stripeIdempotencyKeys.providerCheckoutSession(
+          input.reservationId,
+          input.replacedSessionId,
+        ),
+      },
+    );
+    return {
+      sessionId: session.id,
+      url: session.url ?? null,
+      expiresAt: new Date(session.expires_at * 1000),
+    };
+  }
+
+  async retrievePaymentIntentState(
+    paymentIntentId: string,
+  ): Promise<PaymentIntentState | null> {
+    try {
+      const intent = await this.stripe.paymentIntents.retrieve(paymentIntentId);
+      return {
+        id: intent.id,
+        status: intent.status,
+        amount: intent.amount,
+        amountCapturable: intent.amount_capturable,
+        currency: intent.currency,
+        created: intent.created,
+      };
+    } catch (error) {
+      if (isStripeResourceMissing(error)) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /** Captures the full authorized amount. Idempotent per reservation + PI. */
+  async capturePaymentIntent(
+    input: PaymentIntentActionInput,
+  ): Promise<PaymentIntentState> {
+    const intent = await this.stripe.paymentIntents.capture(
+      input.paymentIntentId,
+      {},
+      {
+        idempotencyKey: stripeIdempotencyKeys.providerCapture(
+          input.reservationId,
+          input.paymentIntentId,
+        ),
+      },
+    );
+    return {
+      id: intent.id,
+      status: intent.status,
+      amount: intent.amount,
+      amountCapturable: intent.amount_capturable,
+      currency: intent.currency,
+      created: intent.created,
+    };
+  }
+
+  /**
+   * Voids the authorization (nothing is charged). Idempotent per
+   * reservation + PI; an already-cancelled PI is reported, not thrown.
+   */
+  async cancelPaymentIntent(
+    input: PaymentIntentActionInput,
+  ): Promise<PaymentIntentState> {
+    try {
+      const intent = await this.stripe.paymentIntents.cancel(
+        input.paymentIntentId,
+        { cancellation_reason: "abandoned" },
+        {
+          idempotencyKey: stripeIdempotencyKeys.providerVoid(
+            input.reservationId,
+            input.paymentIntentId,
+          ),
+        },
+      );
+      return {
+        id: intent.id,
+        status: intent.status,
+        amount: intent.amount,
+        amountCapturable: intent.amount_capturable,
+        currency: intent.currency,
+        created: intent.created,
+      };
+    } catch (error) {
+      const current = await this.retrievePaymentIntentState(
+        input.paymentIntentId,
+      );
+      if (current?.status === "canceled") {
+        return current;
+      }
+      throw error;
+    }
   }
 }

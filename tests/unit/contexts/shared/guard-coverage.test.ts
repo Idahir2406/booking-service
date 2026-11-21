@@ -18,6 +18,7 @@ import { InternalApiKeyGuard } from "@/src/contexts/shared/guards/internal-api-k
 const PUBLIC_ROUTES = [
   "GET health",
   "POST webhook",
+  "POST providers/nuitee/webhook",
   "GET reservations/public/rooms/:room_id/calendar",
   "GET reservations/feedback/:token",
   "POST reservations/feedback/:token",

@@ -29,7 +29,7 @@ import {
 } from "@nestjs/common";
 import { Cron, CronExpression } from "@nestjs/schedule";
 import { InjectRepository } from "@nestjs/typeorm";
-import { EntityManager, In, LessThan, Repository } from "typeorm";
+import { EntityManager, In, IsNull, LessThan, Not, Repository } from "typeorm";
 
 import { Site } from "@/src/types/site.types";
 
@@ -74,6 +74,7 @@ import {
 } from "../entities/reservation.entity";
 import { ReservationIncidentEntity } from "../entities/reservation-incident.entity";
 import { canReportHostCannotHost } from "../utils/host-cannot-host.util";
+import { isProviderReservation } from "../utils/provider-reservation.util";
 import { expectedChargeCents } from "../utils/reservation-amount.util";
 import {
   INCIDENT_TYPE,
@@ -1006,6 +1007,8 @@ export class ReservationService {
       checkout: reservation.checkout,
       total: this.toNullableNumber(reservation.total),
       ...(await this.publicPolicySummary(reservation)),
+      source: reservation.source,
+      provider_status: reservation.provider_status ?? null,
     };
   }
 
@@ -1946,6 +1949,17 @@ export class ReservationService {
         `Reservation with id ${input.reservationId} not found`,
       );
     }
+    if (isProviderReservation(reservation)) {
+      // Provider reservations are authorized/booked by ProviderBookingService
+      // (webhook routes metadata.source = nuitee there): never claim nights.
+      this.logger.error(
+        `activateFromPayment called for provider reservation ${reservation.id}; ignored`,
+      );
+      return {
+        reservation,
+        outcome: PAYMENT_ACTIVATION_OUTCOME.ALREADY_ACTIVE,
+      };
+    }
 
     const samePaymentIntent =
       !!input.paymentIntentId &&
@@ -2610,6 +2624,15 @@ export class ReservationService {
       ) {
         return false;
       }
+      // Provider reservation with an authorized card: the booking flow
+      // (ProviderBookingService.resolvePending) confirms or voids it.
+      if (
+        isProviderReservation(reservation) &&
+        (Boolean(reservation.stripe_payment_intent_id) ||
+          reservation.provider_status !== "prebooked")
+      ) {
+        return false;
+      }
       // pay-pending: a stale session's expiry must not cancel a reservation
       // that now has a newer session (checked under the row lock).
       const currentSession = reservation.stripe_checkout_session_id ?? null;
@@ -2700,6 +2723,9 @@ export class ReservationService {
     reservation: ReservationEntity,
     manager: EntityManager,
   ): Promise<void> {
+    if (isProviderReservation(reservation)) {
+      return; // no V4P nights/availability behind a provider reservation
+    }
     const checkin = String(reservation.checkin).slice(0, 10);
     const checkout = String(reservation.checkout).slice(0, 10);
     const nightDates = getNightDatesUtc(checkin, checkout);
@@ -2771,6 +2797,9 @@ export class ReservationService {
     nightDates: string[],
     manager?: EntityManager,
   ) {
+    if (isProviderReservation(reservation)) {
+      return; // no V4P nights/availability behind a provider reservation
+    }
     const firstNight = nightDates.at(0);
     const lastNight = nightDates.at(-1);
     if (firstNight === undefined || lastNight === undefined) {
@@ -2797,15 +2826,24 @@ export class ReservationService {
    */
   @Cron(CronExpression.EVERY_10_SECONDS)
   async processPendingReservations() {
+    const due = {
+      status: "pending" as const,
+      payment_status: "pending" as const,
+      expiration_date: LessThan(new Date(Date.now() - PENDING_EXPIRY_GRACE_MS)),
+    };
     const reservations = await this.reservationRepository.find({
       select: { id: true },
-      where: {
-        status: "pending",
-        payment_status: "pending",
-        expiration_date: LessThan(
-          new Date(Date.now() - PENDING_EXPIRY_GRACE_MS),
-        ),
-      },
+      // Provider reservations only while unpaid (prebooked, no authorization):
+      // once authorized, ProviderBookingService owns their outcome.
+      where: [
+        { ...due, source: Not("nuitee" as const) },
+        {
+          ...due,
+          source: "nuitee" as const,
+          provider_status: "prebooked" as const,
+          stripe_payment_intent_id: IsNull(),
+        },
+      ],
       take: 100,
     });
 

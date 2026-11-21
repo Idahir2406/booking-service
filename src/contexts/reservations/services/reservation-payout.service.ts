@@ -10,7 +10,13 @@ import {
 } from "@nestjs/common";
 import { Cron } from "@nestjs/schedule";
 import { InjectRepository } from "@nestjs/typeorm";
-import { EntityManager, IsNull, LessThanOrEqual, Repository } from "typeorm";
+import {
+  EntityManager,
+  IsNull,
+  LessThanOrEqual,
+  Not,
+  Repository,
+} from "typeorm";
 
 import { type Actor, actors } from "../../payments/domain/audit-actor";
 import { AUDIT_ENTITY } from "../../payments/entities/audit-log.entity";
@@ -22,6 +28,7 @@ import { StripeService } from "../../stripe/services/stripe.service";
 import { stripeIdempotencyKeys } from "../../stripe/utils/stripe-idempotency.util";
 import { ReservationEntity } from "../entities/reservation.entity";
 import { ReservationGuestFeedbackEntity } from "../entities/reservation-guest-feedback.entity";
+import { isProviderReservation } from "../utils/provider-reservation.util";
 import { expectedChargeCents } from "../utils/reservation-amount.util";
 import { isDeferredUnpaid } from "../utils/reservation-policy.util";
 import { ReservationService } from "./reservation.service";
@@ -113,6 +120,16 @@ export class ReservationPayoutService {
                 released: false,
                 transferId: reservation.stripe_transfer_id,
                 reason: "already_transferred",
+              } satisfies ReleasePayoutResult,
+              reservation,
+            };
+          }
+
+          if (isProviderReservation(reservation)) {
+            return {
+              result: {
+                released: false,
+                reason: "provider_reservation",
               } satisfies ReleasePayoutResult,
               reservation,
             };
@@ -419,6 +436,8 @@ export class ReservationPayoutService {
         payout_status: "held",
         feedback_deadline_at: LessThanOrEqual(now),
         stripe_transfer_id: IsNull(),
+        // Provider reservations (nuitee) never pay a host.
+        source: Not("nuitee" as const),
       },
     });
 

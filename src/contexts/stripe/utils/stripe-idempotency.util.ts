@@ -34,6 +34,21 @@ export const stripeIdempotencyKeys = {
   offsessionCharge: (reservationId: number, attempt: number): string =>
     `offsession-charge:${reservationId}:${attempt}`,
   expressAccount: (userId: number): string => `express-account:${userId}`,
+  /**
+   * Provider reservation (source = nuitee): manual-capture Checkout Session.
+   * Same retry rule as checkoutSessionRetry (replaced session or "none").
+   */
+  providerCheckoutSession: (
+    reservationId: number,
+    replacedSessionId: string | null,
+  ): string =>
+    `provider-checkout:${reservationId}:${replacedSessionId ?? "none"}`,
+  /** Capture of the authorized PaymentIntent once the provider confirmed. */
+  providerCapture: (reservationId: number, paymentIntentId: string): string =>
+    `provider-capture:${reservationId}:${paymentIntentId}`,
+  /** Void (cancel) of the authorization when the provider booking failed. */
+  providerVoid: (reservationId: number, paymentIntentId: string): string =>
+    `provider-void:${reservationId}:${paymentIntentId}`,
 } as const;
 
 export function reservationTransferGroup(reservationId: number): string {

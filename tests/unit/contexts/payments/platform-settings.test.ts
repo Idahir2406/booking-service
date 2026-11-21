@@ -49,3 +49,23 @@ describe("parsePlatformSettings · deferred charge", () => {
     ]);
   });
 });
+
+describe("parsePlatformSettings · provider markup", () => {
+  it("defaults to 0.15 and parses a valid fraction", () => {
+    expect(parsePlatformSettings([]).provider_markup_rate).toBe(0.15);
+    expect(
+      parsePlatformSettings([{ key: "provider_markup_rate", value: "0.18" }])
+        .provider_markup_rate,
+    ).toBe(0.18);
+  });
+
+  it("invalid values fall back to the default", () => {
+    const invalid: string[] = [];
+    const settings = parsePlatformSettings(
+      [{ key: "provider_markup_rate", value: "15" }],
+      key => invalid.push(key),
+    );
+    expect(settings.provider_markup_rate).toBe(0.15);
+    expect(invalid).toEqual(["provider_markup_rate"]);
+  });
+});

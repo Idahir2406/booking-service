@@ -15,7 +15,8 @@ async function bootstrap() {
     bodyParser: false,
   });
 
-  const port = envs.PORT;
+  const port =
+    envs.NODE_ENV === "development" ? envs.PORT : envs.PRODUCTION_PORT;
   app.enableCors();
   app.enableVersioning({
     type: VersioningType.URI,
@@ -37,6 +38,17 @@ async function bootstrap() {
     "/v1/webhook",
     express.raw({
       type: "application/json",
+      verify: (req, _res, buf) => {
+        (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+      },
+    }),
+  );
+  // Nuitee/LiteAPI webhook: HMAC over the exact raw bytes (phase 5). Any
+  // content type, so a provider sending text/plain still gets verified.
+  app.use(
+    "/v1/providers/nuitee/webhook",
+    express.raw({
+      type: () => true,
       verify: (req, _res, buf) => {
         (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
       },

@@ -15,6 +15,7 @@ import { envs } from "../../shared/configs/envs";
 import { CancelReservationDto } from "../dto/cancel-reservation.dto";
 import { ReservationEntity } from "../entities/reservation.entity";
 import { ReservationIncidentEntity } from "../entities/reservation-incident.entity";
+import { isProviderReservation } from "../utils/provider-reservation.util";
 import {
   AUTO_FINALIZE_AFTER_HOURS,
   computeReservationPolicyCapabilities,
@@ -199,7 +200,9 @@ export class ReservationLifecycleService {
         reservation.status = "finalized";
         reservation.finalized_at = now;
         reservation.feedback_deadline_at = deadline;
-        if (!reservation.payout_status) {
+        // Provider reservations (nuitee) have no host payout: payout_status
+        // stays NULL (= not applicable).
+        if (!reservation.payout_status && !isProviderReservation(reservation)) {
           await this.economics.transitionPayout(
             manager,
             reservation,

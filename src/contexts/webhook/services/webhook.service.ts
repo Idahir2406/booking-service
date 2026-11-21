@@ -4,11 +4,20 @@ import type {
   WebhookHandlerResult,
 } from "../types/stripe-webhook-event.type";
 
-import { ConflictException, Injectable, Logger } from "@nestjs/common";
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  Optional,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { EntityManager, Repository } from "typeorm";
 import { QueryDeepPartialEntity } from "typeorm/query-builder/QueryPartialEntity";
 
+import {
+  isProviderCheckoutEvent,
+  ProviderBookingService,
+} from "../../provider-reservations/services/provider-booking.service";
 import {
   StripeWebhookEventEntity,
   WEBHOOK_EVENT_STATUS,
@@ -59,6 +68,10 @@ export class WebhookService {
     private readonly reservationWebhookService: ReservationWebhookService,
     private readonly expressAccountsService: ExpressAccountsService,
     private readonly hostPayoutWebhookService: HostPayoutWebhookService,
+    // Provider reservations (source = nuitee). Last + optional so existing
+    // fixtures keep their positional args.
+    @Optional()
+    private readonly providerBookingService?: ProviderBookingService,
   ) {}
 
   async handleWebhook(event: StripeWebhookEvent): Promise<HandleWebhookResult> {
@@ -197,6 +210,15 @@ export class WebhookService {
     switch (event.type) {
       case "checkout.session.completed":
       case "checkout.session.async_payment_succeeded": {
+        // Provider reservations: authorization only (manual capture), no
+        // night claim, no host payout; the provider book runs after commit.
+        if (this.providerBookingService && isProviderCheckoutEvent(event)) {
+          return this.providerBookingService.handleCheckoutCompleted(
+            event,
+            manager,
+            afterCommit,
+          );
+        }
         return this.reservationWebhookService.handleCheckoutCompleted(
           event,
           manager,

@@ -548,10 +548,109 @@ export class ReservationEmailTemplateService {
         });
       }
 
+      case "provider_reservation_confirmed": {
+        return dispatch(guestEmail, {
+          subject: "Reserva confirmada",
+          intro:
+            "Tu reserva está confirmada por el alojamiento. Guarda este email: es tu bono de reserva.",
+          roleLabel: "huésped",
+          extraHtml:
+            this.providerVoucherHtml(payload) +
+            this.confirmationBreakdownHtml(payload, "guest"),
+        });
+      }
+
+      case "provider_reservation_failed": {
+        return dispatch(guestEmail, {
+          subject: "No hemos podido confirmar tu reserva",
+          intro:
+            "El alojamiento no ha podido confirmar tu reserva (ya no quedaba disponibilidad a ese precio). No se te ha cobrado nada: hemos anulado la retención de tu tarjeta. Según tu banco, puede tardar unos días en desaparecer del extracto.",
+          roleLabel: "huésped",
+          extraHtml: this.providerAlternativesHtml(payload),
+        });
+      }
+
+      case "provider_reservation_admin_alert": {
+        const alert = (payload.provider?.alert ?? "").trim();
+        return dispatch(adminEmail, {
+          subject: "Revisar reserva de proveedor",
+          intro: "Una reserva de proveedor (Nuitee) necesita revisión manual.",
+          roleLabel: "admin",
+          extraHtml: alert === "" ? "" : `<p>${this.escapeHtml(alert)}</p><br>`,
+        });
+      }
+
       default: {
         return null;
       }
     }
+  }
+
+  /** Provider voucher: confirmation code, room, taxes at the property, pets. */
+  private providerVoucherHtml(payload: ReservationEmailPayload): string {
+    const details = payload.provider ?? {};
+    const rows: [string, string][] = [];
+    if (details.hotel_confirmation_code) {
+      rows.push([
+        "Código de confirmación del hotel",
+        details.hotel_confirmation_code,
+      ]);
+    }
+    if (details.booking_id) {
+      rows.push(["Localizador", details.booking_id]);
+    }
+    if (details.room_name) {
+      rows.push(["Habitación", details.room_name]);
+    }
+    if (details.board_name) {
+      rows.push(["Régimen", details.board_name]);
+    }
+    let html = rows
+      .map(
+        ([label, value]) =>
+          `${this.escapeHtml(label)}: <strong>${this.escapeHtml(value)}</strong><br>`,
+      )
+      .join("");
+    if (html !== "") {
+      html += "<br>";
+    }
+    const taxes = details.taxes_at_property ?? [];
+    if (taxes.length > 0) {
+      html += `<p><strong>${this.escapeHtml("A pagar en el alojamiento")}</strong></p><ul>`;
+      html += taxes.map(line => `<li>${this.escapeHtml(line)}</li>`).join("");
+      html += "</ul>";
+    }
+    const cancellation = (details.cancellation_text ?? "").trim();
+    if (cancellation !== "") {
+      html += `<p><strong>${this.escapeHtml("Política de cancelación")}</strong><br>${this.escapeHtml(cancellation)}</p><br>`;
+    }
+    const pets = (details.pet_policy_text ?? "").trim();
+    if (pets !== "") {
+      html += `<p><strong>${this.escapeHtml("Política de mascotas del alojamiento")}</strong><br>${this.escapeHtml(pets)}</p><br>`;
+    }
+    const remarks = (details.dog_remarks ?? "").trim();
+    if (remarks !== "") {
+      html += `<p>${this.escapeHtml(
+        `Hemos enviado al alojamiento esta nota: «${remarks}». El alojamiento no está obligado a atender las peticiones especiales; si tienes dudas, contacta con él antes de llegar.`,
+      )}</p><br>`;
+    }
+    return html;
+  }
+
+  private providerAlternativesHtml(payload: ReservationEmailPayload): string {
+    const alternatives = payload.provider?.alternatives ?? [];
+    if (alternatives.length === 0) {
+      return `<p>${this.escapeHtml("Puedes buscar otras fechas u otro alojamiento en viajes4patas.")}</p><br>`;
+    }
+    let html = `<p><strong>${this.escapeHtml("Otros alojamientos cerca con reserva inmediata")}</strong></p><ul>`;
+    html += alternatives
+      .map(
+        alternative =>
+          `<li><a href="${this.escapeHtml(alternative.url)}">${this.escapeHtml(alternative.name)}</a></li>`,
+      )
+      .join("");
+    html += "</ul><br>";
+    return html;
   }
 
   /**

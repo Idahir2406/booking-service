@@ -21,6 +21,8 @@ import { GeographyModule } from "@/contexts/geography/geography.module";
 import { MailModule } from "@/contexts/mail/mail.module";
 import { PaymentsModule } from "@/contexts/payments/payments.module";
 import { PetPoliciesModule } from "@/contexts/pet-policies/pet-policies.module";
+import { ProviderReservationsModule } from "@/contexts/provider-reservations/provider-reservations.module";
+import { ProvidersModule } from "@/contexts/providers/providers.module";
 import { ReservationModule } from "@/contexts/reservations/reservation.module";
 import { RoomsModule } from "@/contexts/rooms/rooms.module";
 import { envs } from "@/contexts/shared/configs/envs";
@@ -80,6 +82,10 @@ import { WebhookModule } from "../contexts/webhook/webhook.module";
     GeographyModule,
     SiteWizardModule,
     SiteHistoryModule,
+    // External accommodation providers (Nuitee/LiteAPI), phase 1: no routes
+    ProvidersModule,
+    // Provider reservations: rates, quote, manual-capture checkout, book
+    ProviderReservationsModule,
   ],
 })
 export class AppModule {}

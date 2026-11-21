@@ -10,7 +10,8 @@ export class CreateReservationDto {
   @Min(1)
   room_id!: number;
 
-  @IsIn(source_values)
+  // Provider reservations (nuitee) are created only by the providers flow.
+  @IsIn(source_values.filter(value => value !== "nuitee"))
   source!: SourceValue;
 
   @IsInt()

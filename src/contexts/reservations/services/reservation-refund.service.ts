@@ -9,6 +9,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { EntityManager, Repository } from "typeorm";
@@ -19,7 +20,6 @@ import { ReviewRefundDto } from "../../payments/dto/review-refund.dto";
 import { RefundEntity } from "../../payments/entities/refund.entity";
 import { ReservationEconomicsService } from "../../payments/services/reservation-economics.service";
 import { ReservationSnapshotService } from "../../payments/services/reservation-snapshot.service";
-import { envs } from "../../shared/configs/envs";
 import { StripeService } from "../../stripe/services/stripe.service";
 import { stripeIdempotencyKeys } from "../../stripe/utils/stripe-idempotency.util";
 import { ExceptionalRefundRequestDto } from "../dto/exceptional-refund-request.dto";
@@ -27,6 +27,7 @@ import { TravelerCancelReservationDto } from "../dto/traveler-cancel-reservation
 import { ReservationEntity } from "../entities/reservation.entity";
 import { ReservationDisputeEntity } from "../entities/reservation-dispute.entity";
 import { isPartiallyRefundedByChangeOnly } from "../utils/change-refund.util";
+import { isProviderReservation } from "../utils/provider-reservation.util";
 import {
   resolveTravelerCancellationQuote,
   TRAVELER_CANCELLATION_REASON,
@@ -36,6 +37,10 @@ import {
 } from "../utils/refund-policy.util";
 import { expectedChargeCents } from "../utils/reservation-amount.util";
 import { isDeferredUnpaid } from "../utils/reservation-policy.util";
+import {
+  ProviderCancellationBridge,
+  type ProviderCancellationHandler,
+} from "./provider-cancellation.bridge";
 import { ReservationService } from "./reservation.service";
 import {
   PENALTY_CHARGE_OUTCOME,
@@ -56,6 +61,11 @@ interface CancelTravelerOutcome {
   incidentId?: number;
   /** Fase 4: flexible reservation cancelled before its deferred charge. */
   deferred?: DeferredCancelOutcome;
+  /**
+   * Phase 5 providers (source = nuitee): the provider has not confirmed the
+   * cancellation yet; nothing refunded, the reconciliation cron finishes it.
+   */
+  providerPending?: boolean;
 }
 
 /** Fase 4: what the cancellation of an unpaid flexible reservation did. */
@@ -92,7 +102,24 @@ export class ReservationRefundService {
     private readonly incidentService: ReservationIncidentService,
     // Fase 4 (last so pre-existing fixtures keep their positional args).
     private readonly deferredChargeService?: ReservationDeferredChargeService,
+    // Phase 5 providers: nuitee cancellations (provider cancel before refund).
+    private readonly providerCancellation?: ProviderCancellationBridge,
   ) {}
+
+  /**
+   * source = nuitee is never cancelled here: the provider must confirm the
+   * cancellation before any refund. Without the provider handler (context
+   * not loaded) the cancellation is refused instead of refunding blindly.
+   */
+  private providerHandler(): ProviderCancellationHandler {
+    const handler = this.providerCancellation?.get() ?? null;
+    if (!handler) {
+      throw new ServiceUnavailableException(
+        "Provider cancellations are not available right now",
+      );
+    }
+    return handler;
+  }
 
   private async lockReservation(
     manager: EntityManager,
@@ -179,6 +206,13 @@ export class ReservationRefundService {
       throw new NotFoundException(`Reservation with id ${id} not found`);
     }
     this.assertTravelerAccess(reservation, userId);
+    if (isProviderReservation(reservation)) {
+      return this.providerHandler().previewTravelerCancellation(
+        reservation,
+        reason,
+        now,
+      );
+    }
 
     const snapshot = await this.loadSnapshotPayload(undefined, reservation);
     const fromChange = await this.isPartialRefundFromChange(
@@ -227,6 +261,24 @@ export class ReservationRefundService {
     id: number,
     dto: TravelerCancelReservationDto,
   ): Promise<CancelTravelerOutcome> {
+    const existing = await this.reservationRepository.findOne({
+      where: { id },
+    });
+    if (existing && isProviderReservation(existing)) {
+      this.assertTravelerAccess(existing, dto.user_id);
+      const provider = await this.providerHandler().cancelByTraveler(id, {
+        userId: dto.user_id,
+        reason: dto.cancellation_reason,
+        notes: dto.notes ?? null,
+      });
+      return {
+        reservation: provider.reservation,
+        refundInitiated: provider.refundInitiated,
+        refundPendingReview: false,
+        providerPending: provider.pending,
+      };
+    }
+
     const outcome = await this.reservationRepository.manager.transaction(
       async (manager): Promise<CancelTravelerOutcome> => {
         const reservation = await this.lockReservation(manager, id);

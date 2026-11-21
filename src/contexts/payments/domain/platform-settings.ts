@@ -11,6 +11,7 @@ export const PLATFORM_SETTING_KEY = {
   PAYOUT_FAILURE_DAYS: "payout_failure_days",
   DEFERRED_CHARGE_ENABLED: "deferred_charge_enabled",
   DEFERRED_MIN_LEAD_HOURS: "deferred_min_lead_hours",
+  PROVIDER_MARKUP_RATE: "provider_markup_rate",
 } as const;
 
 export type PlatformSettingKey =
@@ -32,6 +33,11 @@ export interface PlatformSettings {
   deferred_charge_enabled: boolean;
   /** A6: below these hours until the deadline the charge is immediate. */
   deferred_min_lead_hours: number;
+  /**
+   * V4P markup over the provider NET rate (Nuitee is queried with margin 0):
+   * sell = net + round_half_up(net x rate). Fraction (0.15 = 15 %).
+   */
+  provider_markup_rate: number;
 }
 
 /** Code defaults: used when a row is missing or the DB is unreachable. */
@@ -44,6 +50,7 @@ export const PLATFORM_SETTING_DEFAULTS: Readonly<PlatformSettings> = {
   payout_failure_days: 7,
   deferred_charge_enabled: false,
   deferred_min_lead_hours: 48,
+  provider_markup_rate: 0.15,
 };
 
 /**
@@ -110,6 +117,14 @@ export function parsePlatformSettings(
       case PLATFORM_SETTING_KEY.COMMISSION_RATE: {
         try {
           settings.commission_rate = normalizeRate(raw);
+        } catch {
+          onInvalid?.(row.key, raw);
+        }
+        break;
+      }
+      case PLATFORM_SETTING_KEY.PROVIDER_MARKUP_RATE: {
+        try {
+          settings.provider_markup_rate = normalizeRate(raw);
         } catch {
           onInvalid?.(row.key, raw);
         }

@@ -18,7 +18,14 @@ export interface ReservationBoardSnapshot {
   board_amount: number;
 }
 
-export const source_values = ["internal", "airbnb", "booking", "vrbo"] as const;
+export const source_values = [
+  "internal",
+  "airbnb",
+  "booking",
+  "vrbo",
+  // External accommodation provider (LiteAPI); external_reservation_id = bookingId.
+  "nuitee",
+] as const;
 export type SourceValue = (typeof source_values)[number];
 export const status_values = [
   "pending",
@@ -38,10 +45,22 @@ export const charge_mode_values = ["immediate", "flexible"] as const;
 export type ChargeModeValue = (typeof charge_mode_values)[number];
 export const payout_status_values = ["held", "released", "blocked"] as const;
 export type PayoutStatusValue = (typeof payout_status_values)[number];
+/** Lifecycle of the booking at the external provider (source = nuitee). */
+export const provider_status_values = [
+  "prebooked",
+  "booking",
+  "confirmed",
+  "failed",
+  "cancelled",
+] as const;
+export type ProviderStatusValue = (typeof provider_status_values)[number];
 
 @Entity("reservations")
 @Index("idx_reservations_site_room", ["site_id", "room_id"])
 @Index("idx_reservations_user_checkin", ["user_id", "checkin"])
+@Index("uq_reservations_client_reference", ["client_reference"], {
+  unique: true,
+})
 @Index("idx_reservations_deferred_charge", [
   "charge_mode",
   "payment_status",
@@ -244,6 +263,20 @@ export class ReservationEntity {
   /** Timezone applicable to deadlines (A6/A10). */
   @Column({ type: "varchar", length: 64, nullable: true })
   timezone?: string | null;
+
+  // --- External provider (source = nuitee) ----------------------------------
+
+  /** Provider booking state; null for internal reservations. */
+  @Column({ type: "enum", enum: provider_status_values, nullable: true })
+  provider_status?: ProviderStatusValue | null;
+
+  /** Idempotency reference sent to the provider (V4P-<id>). */
+  @Column({ type: "varchar", length: 64, nullable: true })
+  client_reference?: string | null;
+
+  /** Last provider booking payload (BookResult.raw / getBooking). */
+  @Column({ type: "json", nullable: true })
+  provider_booking_json?: unknown;
 
   @CreateDateColumn()
   created_at!: Date;

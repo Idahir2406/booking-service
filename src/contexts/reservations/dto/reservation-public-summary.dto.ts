@@ -1,5 +1,7 @@
 import type {
   PaymentStatusValue,
+  ProviderStatusValue,
+  SourceValue,
   StatusValue,
 } from "../entities/reservation.entity";
 
@@ -27,4 +29,8 @@ export class ReservationPublicSummaryDto {
   charge_at_iso!: string | null;
   /** Fase 5: site timezone used to show charge_at_iso. */
   timezone!: string | null;
+  /** Nuitee: "nuitee" reservations are confirmed by the hotel after payment. */
+  source!: SourceValue;
+  /** Nuitee: prebooked|booking|confirmed|failed|cancelled (null = internal). */
+  provider_status!: ProviderStatusValue | null;
 }

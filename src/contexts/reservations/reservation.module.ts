@@ -41,6 +41,7 @@ import { ReservationIncidentEntity } from "./entities/reservation-incident.entit
 import { ReservationIncidentAttachmentEntity } from "./entities/reservation-incident-attachment.entity";
 import { ReservationIncidentMessageEntity } from "./entities/reservation-incident-message.entity";
 import { HostPayoutBlockService } from "./services/host-payout-block.service";
+import { ProviderCancellationBridge } from "./services/provider-cancellation.bridge";
 import { ReservationService } from "./services/reservation.service";
 import { ReservationAlternativeService } from "./services/reservation-alternative.service";
 import { ReservationChangeService } from "./services/reservation-change.service";
@@ -144,9 +145,12 @@ import { TravelerReservationPayService } from "./services/traveler-reservation-p
     ReservationHistoryService,
     // Fase 4: off-session deferred charge + regularization crons
     ReservationDeferredChargeService,
+    // Phase 5 providers: nuitee cancellation served by provider-reservations
+    ProviderCancellationBridge,
     MysqlService,
   ],
   exports: [
+    ProviderCancellationBridge,
     HostPayoutBlockService,
     ReservationService,
     ReservationEmailService,

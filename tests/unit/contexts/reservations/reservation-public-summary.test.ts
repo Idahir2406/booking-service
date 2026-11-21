@@ -14,6 +14,8 @@ const legacyRow = {
   total: "400.00",
   timezone: null,
   stripe_checkout_session_id: "cs_legacy",
+  source: "internal",
+  provider_status: null,
 };
 
 const createService = (findLatestSnapshot: () => Promise<unknown>) => {
@@ -63,6 +65,8 @@ describe("Fase 5 · ReservationService.getPublicSummary (legacy)", () => {
       charge_mode: "immediate",
       charge_at_iso: null,
       timezone: "Europe/Madrid",
+      source: "internal",
+      provider_status: null,
     });
   });
 

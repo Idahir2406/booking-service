@@ -8,6 +8,7 @@ import type {
   ReservationEmailDog,
   ReservationEmailPayload,
   ReservationEmailPriceLine,
+  ReservationEmailProviderDetails,
   ReservationEmailType,
 } from "../types/reservation-email.types";
 
@@ -134,7 +135,9 @@ export class ReservationEmailService {
       total: Number(reservation.total),
       site_id: reservation.site_id,
       site_name: site.name ?? "Alojamiento",
-      host_email: site.email ?? "",
+      // Provider reservations (source = nuitee) have no V4P host: every
+      // host template is skipped (missing recipient).
+      host_email: reservation.source === "nuitee" ? "" : (site.email ?? ""),
       ...extras,
     };
   }
@@ -268,6 +271,48 @@ export class ReservationEmailService {
       reservation,
       site,
       details,
+    );
+  }
+
+  /** Provider reservation confirmed: voucher to the traveler. */
+  async sendProviderReservationConfirmedEmail(
+    reservation: ReservationEntity,
+    site: Site,
+    provider: ReservationEmailProviderDetails,
+  ): Promise<void> {
+    await this.sendReservationEmail(
+      "provider_reservation_confirmed",
+      reservation,
+      site,
+      { ...(await this.confirmationDetails(reservation)), provider },
+    );
+  }
+
+  /** Provider book failed: nothing charged + nearby alternatives. */
+  async sendProviderReservationFailedEmail(
+    reservation: ReservationEntity,
+    site: Site,
+    provider: ReservationEmailProviderDetails,
+  ): Promise<void> {
+    await this.sendReservationEmail(
+      "provider_reservation_failed",
+      reservation,
+      site,
+      { provider },
+    );
+  }
+
+  /** Provider reservation needs manual review (capture/void failed...). */
+  async sendProviderReservationAdminAlert(
+    reservation: ReservationEntity,
+    site: Site,
+    alert: string,
+  ): Promise<void> {
+    await this.sendReservationEmail(
+      "provider_reservation_admin_alert",
+      reservation,
+      site,
+      { provider: { alert } },
     );
   }
 

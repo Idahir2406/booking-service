@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 
 import { PaymentsModule } from "../payments/payments.module";
+import { ProviderReservationsModule } from "../provider-reservations/provider-reservations.module";
 import { ReservationEntity } from "../reservations/entities/reservation.entity";
 import { ReservationModule } from "../reservations/reservation.module";
 import { StripeModule } from "../stripe/stripe.module";
@@ -25,6 +26,7 @@ import { WebhookService } from "./services/webhook.service";
     ReservationModule,
     StripeModule,
     PaymentsModule,
+    ProviderReservationsModule,
     TypeOrmModule.forFeature([StripeWebhookEventEntity, ReservationEntity]),
   ],
 })

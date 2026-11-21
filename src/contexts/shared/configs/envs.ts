@@ -4,6 +4,7 @@ import { z } from "zod";
 config();
 const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
+  PRODUCTION_PORT: z.coerce.number().default(3000),
   NODE_ENV: z
     .enum(["development", "production", "test"])
     .default("development"),
@@ -60,6 +61,40 @@ const envSchema = z.object({
   MAIL_QUEUE_NAME: z.string().default("mail-send"),
   // Shared secret for server-to-server calls (PHP web -> booking), header X-Internal-Key
   INTERNAL_API_KEY: z.string().min(32),
+  // --- Nuitee / LiteAPI (providers context). All optional: the app boots
+  // without them; provider calls fail with ProviderNotConfiguredError.
+  NUITEE_API_KEY: z.string().optional(),
+  // Data + rates API (GET /data/*, POST /hotels/rates).
+  NUITEE_API_BASE_URL: z.url().default("https://api.liteapi.travel/v3.0"),
+  // Booking API (prebook, book, bookings, cancel).
+  NUITEE_BOOK_BASE_URL: z.url().default("https://book.liteapi.travel/v3.0"),
+  NUITEE_PAYMENT_METHOD: z
+    .enum(["ACC_CREDIT_CARD", "CREDIT", "WALLET"])
+    .default("ACC_CREDIT_CARD"),
+  NUITEE_WEBHOOK_SECRET: z.string().optional(),
+  NUITEE_GUEST_NATIONALITY: z.string().length(2).default("ES"),
+  NUITEE_CURRENCY: z.string().length(3).default("EUR"),
+  // Local HTTP timeouts (ms): live rate search vs every other call.
+  NUITEE_RATES_TIMEOUT_MS: z.coerce.number().int().min(1000).default(8000),
+  NUITEE_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(1000).default(30_000),
+  // --- Provider reservations (quote -> manual-capture checkout -> book).
+  // Best-effort prebook validity; an older prebook is redone before booking.
+  PROVIDER_PREBOOK_TTL_MINUTES: z.coerce.number().int().min(1).default(20),
+  // A booking with an unknown outcome and no provider record after this many
+  // minutes is failed (authorization voided).
+  PROVIDER_PENDING_FAIL_AFTER_MINUTES: z.coerce
+    .number()
+    .int()
+    .min(5)
+    .default(30),
+  // Card authorizations last ~7 days: void before this age (hours).
+  PROVIDER_AUTH_MAX_AGE_HOURS: z.coerce.number().int().min(1).default(144),
+  // Phase 5 provider crons (pending 5 min, daily reconciliation, weekly
+  // hotel sync). "false" disables them (e.g. a second instance).
+  PROVIDER_CRONS_ENABLED: z
+    .string()
+    .default("true")
+    .transform(v => v === "true" || v === "1"),
 });
 
 export const envs = envSchema.parse(process.env);

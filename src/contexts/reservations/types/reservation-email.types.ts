@@ -45,7 +45,11 @@ export type ReservationEmailType =
   | "deferred_charge_failed_host"
   | "regularization_expired_traveler"
   | "regularization_expired_host"
-  | "deferred_penalty_failed_admin";
+  | "deferred_penalty_failed_admin"
+  // Provider reservations (source = nuitee): voucher, failed book, admin alert
+  | "provider_reservation_confirmed"
+  | "provider_reservation_failed"
+  | "provider_reservation_admin_alert";
 
 /**
  * Punto 9: host-level notices (not tied to one reservation): Stripe could not
@@ -145,6 +149,30 @@ export interface ReservationEmailPayload {
   total_cents?: number;
   deposit?: ReservationEmailDeposit | null;
   dogs?: ReservationEmailDog[];
+  /** Provider reservations (source = nuitee). */
+  provider?: ReservationEmailProviderDetails;
+}
+
+/** Alternative provider site suggested after a failed book. */
+export interface ReservationEmailAlternative {
+  name: string;
+  url: string;
+}
+
+/** Voucher / failure details of a provider reservation. */
+export interface ReservationEmailProviderDetails {
+  booking_id?: string | null;
+  hotel_confirmation_code?: string | null;
+  room_name?: string | null;
+  board_name?: string | null;
+  /** Human lines "City tax: 12,00 EUR" paid at the property. */
+  taxes_at_property?: string[];
+  cancellation_text?: string | null;
+  pet_policy_text?: string | null;
+  dog_remarks?: string | null;
+  alternatives?: ReservationEmailAlternative[];
+  /** Admin alert: what happened. */
+  alert?: string | null;
 }
 
 export interface BuiltReservationEmail {
